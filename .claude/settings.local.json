@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cd \"C:\\\\Users\\\\fabrizio.tacchino\\\\Desktop\\\\PrimoProgettoClaude\\\\Scenario Whatif\" && npm install chartjs-plugin-datalabels --save 2>&1)",
+      "Bash(cd \"C:\\\\Users\\\\fabrizio.tacchino\\\\Desktop\\\\PrimoProgettoClaude\\\\Scenario Whatif\" && npm run build 2>&1)",
+      "Bash(cd \"C:\\\\Users\\\\fabrizio.tacchino\\\\Desktop\\\\PrimoProgettoClaude\\\\Scenario Whatif\" && npm run build 2>&1 | tail -10)",
+      "Bash(cd \"C:\\\\Users\\\\fabrizio.tacchino\\\\Desktop\\\\PrimoProgettoClaude\\\\Scenario Whatif\" && npm run build 2>&1 | tail -8)",
+      "Bash(cd \"C:\\\\Users\\\\fabrizio.tacchino\\\\Desktop\\\\PrimoProgettoClaude\\\\Scenario Whatif\" && npm run build 2>&1 | tail -6)",
+      "Bash(cd \"C:\\\\Users\\\\fabrizio.tacchino\\\\Desktop\\\\PrimoProgettoClaude\\\\Scenario Whatif\" && npm run build 2>&1 | tail -5)",
+      "Bash(cd \"C:\\\\Users\\\\fabrizio.tacchino\\\\Desktop\\\\PrimoProgettoClaude\\\\Scenario Whatif\" && node -e \"\nconst XLSX = require\\('xlsx'\\);\nconst fs = require\\('fs'\\);\nconst files = fs.readdirSync\\('.'\\).filter\\(f => f.toLowerCase\\(\\).includes\\('fct'\\) || f.toLowerCase\\(\\).includes\\('scenario'\\)\\);\nconsole.log\\('Files found:', files\\);\nif \\(files.length > 0\\) {\n  const wb = XLSX.readFile\\(files[0]\\);\n  console.log\\('Sheets:', wb.SheetNames\\);\n  const ws = wb.Sheets[wb.SheetNames[0]];\n  const rows = XLSX.utils.sheet_to_json\\(ws, { defval: null }\\);\n  if \\(rows.length > 0\\) console.log\\('Columns:', Object.keys\\(rows[0]\\)\\);\n  if \\(rows.length > 0\\) console.log\\('First row:', JSON.stringify\\(rows[0]\\)\\);\n}\n\")",
+      "Bash(cd \"C:\\\\Users\\\\fabrizio.tacchino\\\\Desktop\\\\PrimoProgettoClaude\\\\Scenario Whatif\" && npm run build 2>&1 | tail -4)",
+      "Bash(cd \"C:\\\\Users\\\\fabrizio.tacchino\\\\Desktop\\\\PrimoProgettoClaude\\\\Scenario Whatif\" && npm run build 2>&1 | tail -3)",
+      "Bash(cd \"C:\\\\Users\\\\fabrizio.tacchino\\\\Desktop\\\\PrimoProgettoClaude\\\\Scenario Whatif\" && python -c \"\nimport openpyxl\nwb = openpyxl.load_workbook\\('Scenario FCT 2+10 SIL Febbraio.xlsx', data_only=True\\)\nprint\\('Fogli:', wb.sheetnames\\)\n\")",
+      "Bash(echo \"\" >> \"C:\\\\Users\\\\fabrizio.tacchino\\\\Desktop\\\\PrimoProgettoClaude\\\\Scenario Whatif\\\\src\\\\style.css\")"
+    ]
+  }
+}

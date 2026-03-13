@@ -1,0 +1,46 @@
+# Dipendenze
+node_modules/
+
+# Build output
+dist/
+release/
+out/
+build/
+
+# File sensibili / credenziali
+TokenGithub.txt
+prima chiave.txt
+Istruzioni_Comandi.txt
+*.env
+.env*
+
+# Sistema licenze / tools locali
+revoked.json
+tools/
+
+# Cartelle locali / documenti non da versionare
+da Pubblicare su Github/
+file superati/
+Ignore/
+
+# File Office / dati locali
+*.xlsx
+*.xls
+
+# File binari / pacchetti
+*.exe
+*.rar
+*.zip
+*.msi
+
+# Immagini locali non usate
+QrCodePagamentoStripe.png
+
+# OS / editor
+.DS_Store
+Thumbs.db
+desktop.ini
+*.log
+*.tmp
+.vscode/
+.idea/

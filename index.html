@@ -1,0 +1,611 @@
+<!DOCTYPE html>
+<html lang="it">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Analisi Scenari VDP — Impresa B4T</title>
+  <meta name="description" content="Analisi Scenari VDP — Impresa B4T — What-If Analysis" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap"
+    rel="stylesheet" />
+  <link rel="stylesheet" href="/src/style.css" />
+</head>
+
+<body data-theme="dark">
+
+  <!-- LICENSE OVERLAY -->
+  <div id="license-overlay" class="upload-overlay">
+    <div class="upload-card">
+      <div class="upload-icon">
+        <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"
+          stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+          <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+        </svg>
+      </div>
+      <h1>Analisi Scenari VDP</h1>
+      <p class="upload-subtitle">Impresa B4T — Attivazione Licenza</p>
+      <p class="upload-hint">Inserisci la chiave licenza ricevuta via email dopo l'acquisto</p>
+      <textarea id="license-key-input" rows="3"
+        style="width:100%;margin:12px 0;padding:10px;border-radius:8px;border:1px solid var(--border);background:var(--bg-2);color:var(--text);font-size:12px;font-family:monospace;resize:none;box-sizing:border-box;"
+        placeholder="XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX"></textarea>
+      <button id="btn-activate-license" class="upload-btn">
+        Attiva Licenza
+      </button>
+      <div id="license-error"
+        style="margin-top:12px;color:var(--danger);font-size:13px;min-height:20px;text-align:center;"></div>
+
+      <!-- Sezione acquisto -->
+      <div style="margin-top:24px;border-top:1px solid var(--border);padding-top:20px;text-align:center;">
+        <button id="btn-open-store" class="btn btn-outline btn-sm"
+          style="width:100%;padding:10px;font-size:14px;">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+            style="margin-right:6px;vertical-align:middle;">
+            <circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/>
+            <path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/>
+          </svg>
+          Acquista la tua licenza
+        </button>
+        <p style="font-size:11px;color:var(--text-muted);margin-top:8px;">
+          Riceverai la chiave licenza via email dopo il pagamento
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <!-- UPLOAD OVERLAY -->
+  <div id="upload-overlay" class="upload-overlay hidden">
+    <div class="upload-card" id="drop-zone">
+      <div class="upload-icon">
+
+        <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"
+          stroke-linecap="round" stroke-linejoin="round">
+          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+          <polyline points="14 2 14 8 20 8" />
+          <line x1="12" y1="18" x2="12" y2="12" />
+          <polyline points="9 15 12 12 15 15" />
+        </svg>
+      </div>
+      <h1>Analisi Scenari VDP</h1>
+      <p class="upload-subtitle">Impresa B4T — Scenario Planning</p>
+      <p class="upload-hint">Carica o Trascina il file Excel <strong>"Baseline"</strong> per iniziare !</p>
+      <label class="upload-btn" for="file-input" id="upload-label">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+          stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+          <polyline points="17 8 12 3 7 8" />
+          <line x1="12" y1="3" x2="12" y2="15" />
+        </svg>
+        Seleziona File Excel
+      </label>
+      <a href="/templates/Baseline_Template.xlsx" class="template-link" download>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+          style="margin-right:4px;vertical-align:middle;">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+          <polyline points="7 10 12 15 17 10" />
+          <line x1="12" y1="15" x2="12" y2="3" />
+        </svg>
+        Scarica Baseline Template
+      </a>
+      <input type="file" id="file-input" accept=".xlsx,.xls" hidden />
+      <div id="upload-progress" class="upload-progress hidden">
+        <div class="progress-bar">
+          <div class="progress-fill" id="progress-fill"></div>
+        </div>
+        <span id="progress-text">Caricamento...</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- MAIN APP -->
+  <div id="app" class="app hidden">
+    <!-- HEADER -->
+    <header class="app-header">
+      <div class="header-left">
+        <img class="logo-mark" src="/logo.png" alt="WI Logo" />
+        <div>
+          <h1 class="header-title">Analisi Scenari VDP</h1>
+          <span class="header-sub">Impresa B4T</span>
+        </div>
+      </div>
+      <div class="header-center">
+        <!-- Scenario selector -->
+        <div class="scenario-selector">
+          <label>Scenario attivo:</label>
+          <select id="active-scenario-select"></select>
+          <button id="btn-new-scenario" class="btn btn-primary btn-sm" title="Nuovo scenario">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="12" y1="5" x2="12" y2="19" />
+              <line x1="5" y1="12" x2="19" y2="12" />
+            </svg>
+            Nuovo
+          </button>
+          <button id="btn-import-scenario" class="btn btn-success btn-sm" title="Importa Scenario da Excel">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+              <polyline points="17 8 12 3 7 8" />
+              <line x1="12" y1="3" x2="12" y2="15" />
+            </svg>
+            Importa Scenario
+          </button>
+
+          <input type="file" id="update-file-input" accept=".xlsx,.xls" hidden />
+          <button id="btn-duplicate-scenario" class="btn btn-ghost btn-sm" title="Duplica scenario">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="9" y="9" width="13" height="13" rx="2" />
+              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+            </svg>
+          </button>
+          <button id="btn-delete-scenario" class="btn btn-danger btn-sm" title="Elimina scenario">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="3 6 5 6 21 6" />
+              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+            </svg>
+          </button>
+        </div>
+      </div>
+      <div class="header-right">
+        <div class="header-actions">
+          <button id="btn-change-file" class="btn btn-ghost btn-sm" title="Carica un nuovo file baseline">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+              <polyline points="14 2 14 8 20 8" />
+            </svg>
+            Cambia Baseline
+          </button>
+          <button id="btn-compare" class="btn btn-outline btn-sm">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="18" y1="20" x2="18" y2="10" />
+              <line x1="12" y1="20" x2="12" y2="4" />
+              <line x1="6" y1="20" x2="6" y2="14" />
+            </svg>
+            Confronta
+          </button>
+          <button id="btn-export" class="btn btn-outline btn-sm">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+              <polyline points="7 10 12 15 17 10" />
+              <line x1="12" y1="15" x2="12" y2="3" />
+            </svg>
+            Export
+          </button>
+          <button id="btn-print" class="btn btn-outline btn-sm">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <polyline points="6 9 6 2 18 2 18 9" />
+              <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" />
+              <rect x="6" y="14" width="12" height="8" />
+            </svg>
+            Stampa
+          </button>
+          <button id="btn-theme-toggle" class="btn btn-outline btn-sm" title="Cambia tema" style="margin-left: 4px;">
+            <svg class="sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+              stroke-width="2">
+              <circle cx="12" cy="12" r="5"></circle>
+              <line x1="12" y1="1" x2="12" y2="3"></line>
+              <line x1="12" y1="21" x2="12" y2="23"></line>
+              <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+              <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+              <line x1="1" y1="12" x2="3" y2="12"></line>
+              <line x1="21" y1="12" x2="23" y2="12"></line>
+              <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+              <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+            </svg>
+            <svg class="moon hidden" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+              stroke-width="2">
+              <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+            </svg>
+          </button>
+        </div>
+        <div class="header-credit">Software sviluppato da Fabrizio Tacchino &copy;</div>
+      </div>
+    </header>
+
+    <!-- BANNER SCADENZA LICENZA -->
+    <div id="license-warning-banner" class="hidden"
+      style="background:var(--warning,#f59e0b);color:#000;text-align:center;padding:6px 12px;font-size:13px;font-weight:500;">
+    </div>
+
+    <!-- BANNER AGGIORNAMENTO -->
+    <div id="update-banner" class="update-banner hidden">
+      <div class="update-banner-inner">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+          style="flex-shrink:0;">
+          <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>
+          <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+        </svg>
+        <span id="update-banner-text">Scaricamento aggiornamento...</span>
+        <div id="update-progress-wrap" class="update-progress-wrap">
+          <div class="update-progress-track">
+            <div id="update-progress-fill" class="update-progress-fill"></div>
+          </div>
+          <span id="update-progress-pct" class="update-progress-pct">0%</span>
+        </div>
+        <div id="update-actions" class="update-actions hidden">
+          <button id="btn-update-install" class="btn btn-primary btn-sm">Riavvia ora</button>
+          <button id="btn-update-later" class="btn btn-ghost btn-sm">Più tardi</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- FILTERS BAR -->
+    <div class="filters-bar" id="filters-bar">
+      <div class="filter-group">
+        <label>Settore</label>
+        <div id="filter-settore" class="filter-chips"></div>
+      </div>
+      <div class="filter-group">
+        <label>Tipo</label>
+        <div id="filter-type" class="filter-chips">
+          <button class="filter-chip" data-value="Backlog">Backlog</button>
+          <button class="filter-chip" data-value="Order Intake">Order Intake</button>
+        </div>
+      </div>
+      <div class="filter-group">
+        <label>Da</label>
+        <input type="month" id="filter-date-from" />
+      </div>
+      <div class="filter-group">
+        <label>A</label>
+        <input type="month" id="filter-date-to" />
+      </div>
+      <button id="btn-reset-filters" class="btn btn-ghost btn-sm">Reset Filtri</button>
+
+      <!-- ZOOM CONTROLS (Moved here) -->
+      <div id="zoom-controls" class="zoom-controls">
+        <button id="btn-zoom-out" class="zoom-btn" title="Rimpicciolisci (Ctrl −)">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="11" cy="11" r="8" />
+            <line x1="21" y1="21" x2="16.65" y2="16.65" />
+            <line x1="8" y1="11" x2="14" y2="11" />
+          </svg>
+        </button>
+        <button id="btn-zoom-fit" class="zoom-btn" title="Adatta allo schermo">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" />
+          </svg>
+        </button>
+        <button id="btn-zoom-reset" class="zoom-btn zoom-label" title="Ripristina zoom (Ctrl 0)">
+          <span id="zoom-level-text">100%</span>
+        </button>
+        <button id="btn-zoom-in" class="zoom-btn" title="Ingrandisci (Ctrl +)">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="11" cy="11" r="8" />
+            <line x1="21" y1="21" x2="16.65" y2="16.65" />
+            <line x1="11" y1="8" x2="11" y2="14" />
+            <line x1="8" y1="11" x2="14" y2="11" />
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- APP CONTAINER (SIDEBAR + CONTENT) -->
+    <div class="app-container">
+      <!-- SIDEBAR -->
+      <aside class="sidebar">
+        <div class="sidebar-header">
+          <div class="search-box">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="11" cy="11" r="8"></circle>
+              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+            </svg>
+            <input type="text" id="commessa-search" placeholder="Cerca commessa..." />
+          </div>
+        </div>
+        <div id="filter-commessa" class="sidebar-list">
+          <!-- Projects list (chips) will be rendered here -->
+        </div>
+      </aside>
+
+      <!-- MAIN CONTENT -->
+      <main class="main-content">
+        <!-- TAB NAV -->
+        <div class="tab-nav">
+          <button class="tab-btn active" data-tab="dashboard">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="3" y="3" width="7" height="7" />
+              <rect x="14" y="3" width="7" height="7" />
+              <rect x="14" y="14" width="7" height="7" />
+              <rect x="3" y="14" width="7" height="7" />
+            </svg>
+            Dashboard
+          </button>
+          <button class="tab-btn" data-tab="details">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="3" y="3" width="18" height="18" rx="2"/>
+              <line x1="3" y1="9" x2="21" y2="9"/>
+              <line x1="9" y1="9" x2="9" y2="21"/>
+            </svg>
+            Details
+          </button>
+          <button class="tab-btn" data-tab="analisi">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="18" y1="20" x2="18" y2="10" />
+              <line x1="12" y1="20" x2="12" y2="4" />
+              <line x1="6" y1="20" x2="6" y2="14" />
+            </svg>
+            Analisi Annualità
+          </button>
+          <button class="tab-btn" data-tab="commessa">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="3" y="3" width="18" height="4" rx="1"/>
+              <rect x="3" y="10" width="13" height="4" rx="1"/>
+              <rect x="3" y="17" width="9" height="4" rx="1"/>
+            </svg>
+            Analisi Commessa
+          </button>
+          <button class="tab-btn" data-tab="type-settore">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="9" cy="9" r="6"/>
+              <path d="M15 15l5 5"/>
+              <path d="M9 6v6M6 9h6"/>
+            </svg>
+            Analisi Type &amp; Settore
+          </button>
+          <button class="tab-btn" data-tab="assumptions">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+              <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+            </svg>
+            Assunzioni Scenario
+          </button>
+        </div>
+
+        <!-- DASHBOARD TAB -->
+        <div id="tab-dashboard" class="tab-panel active">
+          <!-- KPI ROW -->
+          <div class="kpi-row" id="kpi-row">
+            <div class="kpi-card" id="kpi-vdp-baseline">
+              <div class="kpi-label">VDP Totale Baseline</div>
+              <div class="kpi-value" id="kpi-val-vdp-base">—</div>
+            </div>
+            <div class="kpi-card" id="kpi-vdp-scenario">
+              <div class="kpi-label">VDP Totale Scenario</div>
+              <div class="kpi-value" id="kpi-val-vdp-scen">—</div>
+              <div class="kpi-delta" id="kpi-delta-vdp"></div>
+            </div>
+            <div class="kpi-card" id="kpi-margin-baseline">
+              <div class="kpi-label">Margine Totale Baseline</div>
+              <div class="kpi-value" id="kpi-val-margin-base">—</div>
+            </div>
+            <div class="kpi-card" id="kpi-margin-scenario">
+              <div class="kpi-label">Margine Totale Scenario</div>
+              <div class="kpi-value" id="kpi-val-margin-scen">—</div>
+              <div class="kpi-delta" id="kpi-delta-margin"></div>
+            </div>
+          </div>
+
+          <!-- CHARTS -->
+          <div class="charts-grid">
+            <div class="chart-card">
+              <h3>VDP Mensile</h3>
+              <div class="chart-wrap"><canvas id="chart-vdp-monthly"></canvas></div>
+            </div>
+            <div class="chart-card">
+              <h3>VDP Cumulata</h3>
+              <div class="chart-wrap"><canvas id="chart-vdp-cumulative"></canvas></div>
+            </div>
+            <div class="chart-card">
+              <h3>Margine Mensile</h3>
+              <div class="chart-wrap"><canvas id="chart-margin-monthly"></canvas></div>
+            </div>
+            <div class="chart-card">
+              <h3>Margine Cumulato</h3>
+              <div class="chart-wrap"><canvas id="chart-margin-cumulative"></canvas></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- DETAILS TAB -->
+        <div id="tab-details" class="tab-panel">
+          <div class="charts-grid">
+            <div class="chart-card" style="grid-column: span 2;">
+              <h3>VDP Mensile — Dettaglio per Commessa (Scenario)</h3>
+              <div class="chart-wrap" style="min-height:380px;"><canvas id="chart-details-vdp"></canvas></div>
+            </div>
+            <div class="chart-card" style="grid-column: span 2;">
+              <h3>Margine Mensile — Dettaglio per Commessa (Scenario)</h3>
+              <div class="chart-wrap" style="min-height:380px;"><canvas id="chart-details-mar"></canvas></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ANALISI TAB -->
+        <div id="tab-analisi" class="tab-panel">
+          <div class="charts-grid">
+            <div class="chart-card">
+              <h3>VDP per Anno — Baseline vs Scenario</h3>
+              <div class="chart-wrap"><canvas id="chart-vdp-yearly"></canvas></div>
+            </div>
+            <div class="chart-card">
+              <h3>VDP Scenario per Tipo (Backlog vs Order Intake)</h3>
+              <div class="chart-wrap"><canvas id="chart-vdp-type"></canvas></div>
+            </div>
+            <div class="chart-card">
+              <h3>Margine per Anno — Baseline vs Scenario</h3>
+              <div class="chart-wrap"><canvas id="chart-margin-yearly"></canvas></div>
+            </div>
+            <div class="chart-card">
+              <h3>Margine Scenario per Tipo (Backlog vs Order Intake)</h3>
+              <div class="chart-wrap"><canvas id="chart-margin-type"></canvas></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ANALISI COMMESSA TAB -->
+        <div id="tab-commessa" class="tab-panel">
+          <div class="charts-grid">
+            <div class="chart-card" style="grid-column: span 2;">
+              <h3>Delta VDP per Commessa — Scenario vs Baseline</h3>
+              <div class="chart-wrap" id="wrap-delta-vdp" style="min-height:320px;"><canvas id="chart-delta-vdp"></canvas></div>
+            </div>
+            <div class="chart-card" style="grid-column: span 2;">
+              <h3>Delta Margine per Commessa — Scenario vs Baseline</h3>
+              <div class="chart-wrap" id="wrap-delta-mar" style="min-height:320px;"><canvas id="chart-delta-mar"></canvas></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ANALISI TYPE & SETTORE TAB -->
+        <div id="tab-type-settore" class="tab-panel">
+          <div class="charts-grid">
+            <div class="chart-card">
+              <h3>VDP per Tipo — Baseline vs Scenario</h3>
+              <div class="chart-wrap" style="min-height:280px;"><canvas id="chart-type-comparison"></canvas></div>
+            </div>
+            <div class="chart-card">
+              <h3>Commesse con cambio Type</h3>
+              <div class="chart-wrap" id="wrap-type-changes" style="min-height:280px;"><canvas id="chart-type-changes"></canvas></div>
+            </div>
+            <div class="chart-card">
+              <h3>VDP Scenario per Settore &times; Tipo</h3>
+              <div class="chart-wrap"><canvas id="chart-settore-type"></canvas></div>
+            </div>
+            <div class="chart-card">
+              <h3>VDP Scenario per Settore</h3>
+              <div class="chart-wrap"><canvas id="chart-settore-pie"></canvas></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ASSUMPTIONS TAB -->
+        <div id="tab-assumptions" class="tab-panel">
+          <div class="assumptions-toolbar">
+            <h2>Assunzioni Scenario</h2>
+            <div class="assumptions-actions">
+              <label class="toggle-label">
+                <input type="checkbox" id="chk-show-modified" /> Solo modificate
+              </label>
+            </div>
+          </div>
+
+          <!-- Global sliders -->
+          <div class="global-sliders">
+            <div class="slider-section">
+              <h4>🔵 Order Intake — Modifiche globali</h4>
+              <div class="slider-row">
+                <label>Shift Start (mesi)</label>
+                <input type="number" id="global-oi-shift" value="0" min="-24" max="24" step="1" />
+                <button class="btn btn-sm btn-ghost" id="btn-apply-oi-shift">Applica</button>
+              </div>
+              <div class="slider-row">
+                <label>Probabilità (%)</label>
+                <input type="number" id="global-oi-prob" value="" min="0" max="100" step="5" placeholder="—" />
+                <button class="btn btn-sm btn-ghost" id="btn-apply-oi-prob">Applica</button>
+              </div>
+              <div class="slider-row">
+                <label>Margine (%)</label>
+                <input type="number" id="global-oi-margin" value="" min="0" max="100" step="0.5" placeholder="—" />
+                <button class="btn btn-sm btn-ghost" id="btn-apply-oi-margin">Applica</button>
+              </div>
+            </div>
+            <div class="slider-section">
+              <h4>🟠 Backlog — Modifiche globali</h4>
+              <div class="slider-row">
+                <label>Ritardo Fine (mesi)</label>
+                <input type="number" id="global-bl-delay" value="0" min="0" max="24" step="1" />
+                <button class="btn btn-sm btn-ghost" id="btn-apply-bl-delay">Applica</button>
+              </div>
+              <div class="slider-row">
+                <label>Margine (%)</label>
+                <input type="number" id="global-bl-margin" value="" min="0" max="100" step="0.5" placeholder="—" />
+                <button class="btn btn-sm btn-ghost" id="btn-apply-bl-margin">Applica</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Commesse Table -->
+          <div class="table-container">
+            <table id="assumptions-table" class="assumptions-table">
+              <thead>
+                <tr>
+                  <th class="col-settore">Settore</th>
+                  <th class="col-type">Tipo</th>
+                  <th class="col-codice">Codice</th>
+                  <th class="col-nome">Commessa</th>
+                  <th class="col-prob-aop">Prob AOP</th>
+                  <th class="col-vdp-tot">VDP Tot Base</th>
+                  <th class="col-margin-aop">Margine AOP</th>
+                  <th class="col-input">Shift Start</th>
+                  <th class="col-input">Probabilità %</th>
+                  <th class="col-input">Margine %</th>
+                  <th class="col-input">Ritardo Fine</th>
+                  <th class="col-input">Type Override</th>
+                </tr>
+              </thead>
+              <tbody id="assumptions-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </main>
+    </div> <!-- end .app-container -->
+  </div> <!-- end #app -->
+
+  <!-- COMPARE MODAL -->
+  <div id="compare-modal" class="modal hidden">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2>Confronta Scenari</h2>
+        <button class="modal-close" id="compare-modal-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p>Seleziona gli scenari da confrontare con la Baseline:</p>
+        <div id="compare-scenario-list" class="compare-list"></div>
+        <button id="btn-run-compare" class="btn btn-primary">Confronta</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- NEW SCENARIO MODAL -->
+  <div id="new-scenario-modal" class="modal hidden">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content modal-sm">
+      <div class="modal-header">
+        <h2>Nuovo Scenario</h2>
+        <button class="modal-close" id="new-scenario-modal-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label for="new-scenario-name">Nome</label>
+          <input type="text" id="new-scenario-name" placeholder="Es. Scenario Ottimistico" />
+        </div>
+        <div class="form-group">
+          <label for="new-scenario-notes">Note</label>
+          <textarea id="new-scenario-notes" rows="3" placeholder="Descrizione opzionale..."></textarea>
+        </div>
+        <button id="btn-create-scenario" class="btn btn-primary" style="width:100%;margin-top:12px;">Crea
+          Scenario</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- EXPORT MODAL -->
+  <div id="export-modal" class="modal hidden">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content modal-sm">
+      <div class="modal-header">
+        <h2>Esporta Dati</h2>
+        <button class="modal-close" id="export-modal-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <button id="btn-export-template" class="btn btn-primary" style="width:100%;margin-bottom:8px;">
+          📋 Esporta Template Reimportabile (.xlsx)
+        </button>
+        <button id="btn-export-xlsx" class="btn btn-outline" style="width:100%;margin-bottom:8px;">
+          📊 Esporta Riepilogo Excel (.xlsx)
+        </button>
+        <button id="btn-export-csv" class="btn btn-outline" style="width:100%;">
+          📄 Esporta CSV
+        </button>
+      </div>
+    </div>
+  </div>
+
+
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+
+</html>

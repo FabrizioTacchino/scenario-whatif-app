@@ -1,0 +1,51 @@
+{
+  "name": "analisi-scenari-vdp",
+  "version": "1.0.5",
+  "type": "module",
+  "main": "main.cjs",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "keygen:ui": "electron tools/keygen-main.cjs",
+    "electron:dev": "electron . --dev",
+    "electron:start": "vite build && electron .",
+    "electron:build": "vite build && electron-builder",
+    "release": "vite build && electron-builder --publish always"
+  },
+  "dependencies": {
+    "chart.js": "^4.4.0",
+    "chartjs-plugin-datalabels": "^2.2.0",
+    "electron-updater": "^6.8.3",
+    "vite": "^6.0.0",
+    "xlsx": "^0.18.5"
+  },
+  "build": {
+    "appId": "com.scenariowhatif.app",
+    "productName": "Analisi Scenari VDP",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "main.cjs",
+      "preload.cjs",
+      "logoVDP.png"
+    ],
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "FabrizioTacchino",
+        "repo": "scenario-whatif-app"
+      }
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "logoVDP.png"
+    }
+  },
+  "devDependencies": {
+    "electron": "^40.8.0",
+    "electron-builder": "^26.8.1"
+  }
+}

@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>About</title>
+<style>
+body {
+  font-family: Arial, sans-serif;
+  text-align: center;
+  padding: 40px;
+  background-color: #f4f6f9;
+}
+
+.logo {
+  width: 120px;
+  margin-bottom: 20px;
+}
+
+h2 {
+  margin-bottom: 10px;
+}
+
+p {
+  color: #555;
+}
+
+.license-box {
+  margin-top: 32px;
+  background: #fff;
+  border: 1px solid #dde2ea;
+  border-radius: 10px;
+  padding: 20px 28px;
+  text-align: left;
+  max-width: 520px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.license-box h3 {
+  margin: 0 0 14px 0;
+  font-size: 14px;
+  color: #333;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.license-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 7px 0;
+  border-bottom: 1px solid #f0f0f0;
+  font-size: 13px;
+}
+
+.license-row:last-child {
+  border-bottom: none;
+}
+
+.license-label {
+  color: #888;
+  font-weight: 500;
+  min-width: 130px;
+}
+
+.license-value {
+  color: #222;
+  font-family: monospace;
+  font-size: 12px;
+  word-break: break-all;
+  text-align: right;
+}
+
+.badge {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 600;
+  font-family: Arial, sans-serif;
+}
+
+.badge-active  { background: #d1fae5; color: #065f46; }
+.badge-offline { background: #fef9c3; color: #854d0e; }
+.badge-none    { background: #f3f4f6; color: #6b7280; }
+</style>
+</head>
+<body>
+
+<img src="logo.png" class="logo" />
+
+<h2>Analisi Scenario VDP</h2>
+
+<p><strong>Developed by</strong></p>
+<p>Fabrizio Tacchino</p>
+<p>Chief Digital Transformation Officer</p>
+
+<p style="margin-top:20px;font-size:12px;color:#888;" id="app-version">Version …</p>
+
+<div class="license-box">
+  <h3>Licenza</h3>
+  <div id="license-info">
+    <div class="license-row">
+      <span class="license-label">Stato</span>
+      <span class="license-value"><span class="badge badge-none" id="badge-status">caricamento...</span></span>
+    </div>
+    <div class="license-row" id="row-key">
+      <span class="license-label">Seriale</span>
+      <span class="license-value" id="val-key">—</span>
+    </div>
+    <div class="license-row" id="row-expires">
+      <span class="license-label">Scadenza</span>
+      <span class="license-value" id="val-expires">—</span>
+    </div>
+    <div class="license-row" id="row-activated">
+      <span class="license-label">Attivata il</span>
+      <span class="license-value" id="val-activated">—</span>
+    </div>
+  </div>
+</div>
+
+<script>
+function formatDate(iso) {
+  if (!iso) return '—';
+  try {
+    return new Date(iso).toLocaleDateString('it-IT', {
+      day: '2-digit', month: 'long', year: 'numeric'
+    });
+  } catch { return iso; }
+}
+
+async function loadLicenseInfo() {
+  const badge = document.getElementById('badge-status');
+
+  if (!window.licenseAPI?.getInfo) {
+    badge.textContent = 'N/D (dev mode)';
+    badge.className = 'badge badge-offline';
+    return;
+  }
+
+  const info = await window.licenseAPI.getInfo();
+
+  if (!info || !info.licenseKey) {
+    badge.textContent = 'Non attivata';
+    badge.className = 'badge badge-none';
+    document.getElementById('row-key').style.display = 'none';
+    document.getElementById('row-expires').style.display = 'none';
+    document.getElementById('row-activated').style.display = 'none';
+    return;
+  }
+
+  badge.textContent = 'Attiva';
+  badge.className = 'badge badge-active';
+
+  document.getElementById('val-key').textContent = info.licenseKey;
+  document.getElementById('val-expires').textContent = info.expiresAt ? formatDate(info.expiresAt) : 'Nessuna scadenza';
+  document.getElementById('val-activated').textContent = formatDate(info.activatedAt);
+}
+
+loadLicenseInfo();
+
+async function loadVersion() {
+  const el = document.getElementById('app-version');
+  if (window.electronAPI?.getVersion) {
+    const v = await window.electronAPI.getVersion();
+    el.textContent = 'Version ' + v;
+  } else {
+    el.textContent = 'Version (dev)';
+  }
+}
+loadVersion();
+</script>
+
+</body>
+</html>
