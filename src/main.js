@@ -61,8 +61,43 @@ window.alert = (msg) => { _nativeAlert(msg); _restoreFocus(); };
 
 // ─── Init ───
 document.addEventListener('DOMContentLoaded', async () => {
-    // One-time cleanup: remove duplicate allocazioni from localStorage
+    // One-time cleanup: remove duplicate persone + allocazioni from localStorage
     try {
+        // Dedup persone (by codice fiscale or cognome+nome) and remap allocazioni
+        const _rawP = localStorage.getItem('whatif_persone');
+        if (_rawP) {
+            const _persone = JSON.parse(_rawP);
+            const _seenP = new Map();
+            const _idRemap = new Map();
+            const _removeP = new Set();
+            for (let i = 0; i < _persone.length; i++) {
+                const p = _persone[i];
+                const cf = (p.codiceFiscale || '').toUpperCase().trim();
+                const key = cf || `${(p.cognome || '').toUpperCase()}|${(p.nome || '').toLowerCase()}`;
+                if (!key || key === '|') continue;
+                if (_seenP.has(key)) {
+                    const prevIdx = _seenP.get(key);
+                    const prev = _persone[prevIdx];
+                    if ((p.updatedAt || '') > (prev.updatedAt || '')) {
+                        _removeP.add(prevIdx); _idRemap.set(prev.id, p.id); _seenP.set(key, i);
+                    } else {
+                        _removeP.add(i); _idRemap.set(p.id, prev.id);
+                    }
+                } else { _seenP.set(key, i); }
+            }
+            if (_removeP.size > 0) {
+                console.warn(`[Startup] Rimossi ${_removeP.size} persone duplicate`);
+                localStorage.setItem('whatif_persone', JSON.stringify(_persone.filter((_, i) => !_removeP.has(i))));
+                // Remap allocazioni
+                const _rawA = localStorage.getItem('whatif_allocazioni');
+                if (_rawA) {
+                    const _allocs = JSON.parse(_rawA);
+                    for (const a of _allocs) { const nid = _idRemap.get(a.personaId); if (nid) a.personaId = nid; }
+                    localStorage.setItem('whatif_allocazioni', JSON.stringify(_allocs));
+                }
+            }
+        }
+        // Dedup allocazioni
         const _raw = localStorage.getItem('whatif_allocazioni');
         if (_raw) {
             const _alloc = JSON.parse(_raw);
@@ -72,9 +107,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 if (_seen.has(k)) {
                     const prev = _seen.get(k);
                     if ((a.updatedAt || '') > (prev.updatedAt || '')) _seen.set(k, a);
-                } else {
-                    _seen.set(k, a);
-                }
+                } else { _seen.set(k, a); }
             }
             const _cleaned = [..._seen.values()];
             if (_cleaned.length < _alloc.length) {

@@ -207,6 +207,7 @@ export async function fullPull(userId) {
     await _pullScenarios();
     await _pullPersone();
     await _pullAllocazioni();
+    _deduplicatePersone();
     _deduplicateAllocazioni();
     await _pullAudit();
     await _pullRuoli();
@@ -252,7 +253,8 @@ export async function incrementalSync(userId) {
         const lastSync = localStorage.getItem(LAST_SYNC_KEY) || '1970-01-01T00:00:00Z';
         await _pullIfNewer(lastSync);
 
-        // Post-pull: deduplicate allocazioni (safety net)
+        // Post-pull: deduplicate persone + allocazioni (safety net)
+        _deduplicatePersone();
         _deduplicateAllocazioni();
 
         // Detect if pull changed any data
@@ -733,7 +735,42 @@ async function _pullIfNewer(since) {
                         localPersone[idx] = mapped;
                     }
                 } else {
-                    localPersone.push(mapped);
+                    // Dedup: check if same person exists locally with a different ID
+                    // Match by codice fiscale (primary) or cognome+nome (fallback)
+                    const cf = (mapped.codiceFiscale || '').toUpperCase().trim();
+                    const dupIdx = cf
+                        ? localPersone.findIndex(p => p.id !== mapped.id && (p.codiceFiscale || '').toUpperCase().trim() === cf && cf !== '')
+                        : localPersone.findIndex(p => p.id !== mapped.id &&
+                            (p.cognome || '').toUpperCase() === (mapped.cognome || '').toUpperCase() &&
+                            (p.nome || '').toLowerCase() === (mapped.nome || '').toLowerCase() &&
+                            (mapped.cognome || '') !== '');
+
+                    if (dupIdx >= 0) {
+                        const oldLocalId = localPersone[dupIdx].id;
+                        console.info(`[SyncManager] Persona dedup: merging local ${oldLocalId} → remote ${mapped.id} (${mapped.cognome} ${mapped.nome})`);
+                        localPersone[dupIdx] = mapped;
+
+                        // Remap allocazioni that referenced the old local ID
+                        try {
+                            const allocRaw = localStorage.getItem('whatif_allocazioni');
+                            if (allocRaw) {
+                                const allocs = JSON.parse(allocRaw);
+                                let remapped = 0;
+                                for (const a of allocs) {
+                                    if (a.personaId === oldLocalId) {
+                                        a.personaId = mapped.id;
+                                        remapped++;
+                                    }
+                                }
+                                if (remapped > 0) {
+                                    console.info(`[SyncManager] Remapped ${remapped} allocazioni from ${oldLocalId} → ${mapped.id}`);
+                                    localStorage.setItem('whatif_allocazioni', JSON.stringify(allocs));
+                                }
+                            }
+                        } catch (e) { console.warn('[SyncManager] Remap allocazioni error:', e); }
+                    } else {
+                        localPersone.push(mapped);
+                    }
                 }
             }
         }
@@ -880,6 +917,69 @@ function _deduplicateAllocazioni() {
         console.warn(`[SyncManager] Dedup: removing ${toRemove.size} duplicate allocazioni`);
         const cleaned = alloc.filter((_, i) => !toRemove.has(i));
         localStorage.setItem('whatif_allocazioni', JSON.stringify(cleaned));
+    }
+}
+
+/**
+ * Remove duplicate persone from localStorage and remap orphaned allocazioni.
+ * Two persone are duplicates if they share the same codice fiscale (if present)
+ * or same cognome+nome. Keeps the one with the most recent updatedAt.
+ */
+function _deduplicatePersone() {
+    const raw = localStorage.getItem('whatif_persone');
+    if (!raw) return;
+
+    let persone;
+    try { persone = JSON.parse(raw); } catch { return; }
+    if (!Array.isArray(persone) || persone.length === 0) return;
+
+    const seen = new Map();
+    const idRemap = new Map(); // oldId → survivorId
+    const toRemove = new Set();
+
+    for (let i = 0; i < persone.length; i++) {
+        const p = persone[i];
+        const cf = (p.codiceFiscale || '').toUpperCase().trim();
+        const key = cf || `${(p.cognome || '').toUpperCase()}|${(p.nome || '').toLowerCase()}`;
+        if (!key || key === '|') continue;
+
+        if (seen.has(key)) {
+            const prevIdx = seen.get(key);
+            const prev = persone[prevIdx];
+            if ((p.updatedAt || '') > (prev.updatedAt || '')) {
+                toRemove.add(prevIdx);
+                idRemap.set(prev.id, p.id);
+                seen.set(key, i);
+            } else {
+                toRemove.add(i);
+                idRemap.set(p.id, prev.id);
+            }
+        } else {
+            seen.set(key, i);
+        }
+    }
+
+    if (toRemove.size > 0) {
+        console.warn(`[SyncManager] Dedup: removing ${toRemove.size} duplicate persone`);
+        const cleaned = persone.filter((_, i) => !toRemove.has(i));
+        localStorage.setItem('whatif_persone', JSON.stringify(cleaned));
+
+        // Remap allocazioni referencing removed persone IDs
+        try {
+            const allocRaw = localStorage.getItem('whatif_allocazioni');
+            if (allocRaw) {
+                const allocs = JSON.parse(allocRaw);
+                let remapped = 0;
+                for (const a of allocs) {
+                    const newId = idRemap.get(a.personaId);
+                    if (newId) { a.personaId = newId; remapped++; }
+                }
+                if (remapped > 0) {
+                    console.info(`[SyncManager] Remapped ${remapped} allocazioni after persona dedup`);
+                    localStorage.setItem('whatif_allocazioni', JSON.stringify(allocs));
+                }
+            }
+        } catch (e) { console.warn('[SyncManager] Remap after persona dedup error:', e); }
     }
 }
 
