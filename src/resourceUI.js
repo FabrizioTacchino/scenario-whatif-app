@@ -65,6 +65,8 @@ let _pianifSortDir = 'asc';
 let _ruoliSortCol = 'codice';
 let _ruoliSortDir = 'asc';
 let _capacityPersonaId = '';    // filtro persona in Capacity
+let _capacitySortCol = 'persona'; // 'persona' | 'ruolo'
+let _capacitySortDir = 'asc';
 let _resFilterAlloc = 'all'; // 'all' | 'con' | 'senza'
 let _personaStatusFilter = null; // null | 'attive' | 'scadenza' | 'cessate'
 let _capacityCharts = {};   // Chart.js instances for capacity tab
@@ -1873,10 +1875,22 @@ function _renderCapacity() {
         return;
     }
 
-    // Filtro persona
-    const personeFiltrate = _capacityPersonaId
+    // Filtro persona + ordinamento
+    const personeFiltrate = (_capacityPersonaId
         ? persone.filter(p => p.id === _capacityPersonaId)
-        : persone;
+        : [...persone]
+    ).sort((a, b) => {
+        let va, vb;
+        if (_capacitySortCol === 'ruolo') {
+            va = (a.ruolo || '').toLowerCase();
+            vb = (b.ruolo || '').toLowerCase();
+        } else {
+            va = `${a.cognome} ${a.nome}`.toLowerCase();
+            vb = `${b.cognome} ${b.nome}`.toLowerCase();
+        }
+        const cmp = va.localeCompare(vb, 'it');
+        return _capacitySortDir === 'asc' ? cmp : -cmp;
+    });
 
     // Collect months (from ALL allocations, not filtered by persona)
     const monthSet = new Set();
@@ -2071,8 +2085,8 @@ function _renderCapacity() {
                 <table class="res-saturation-table">
                     <thead>
                         <tr>
-                            <th class="res-sat-fixed">Persona</th>
-                            <th class="res-sat-fixed">Ruolo</th>
+                            <th class="res-sat-fixed res-capacity-sort" data-sort="persona" style="cursor:pointer;user-select:none;">Persona ${_capacitySortCol === 'persona' ? (_capacitySortDir === 'asc' ? '▲' : '▼') : ''}</th>
+                            <th class="res-sat-fixed res-capacity-sort" data-sort="ruolo" style="cursor:pointer;user-select:none;">Ruolo ${_capacitySortCol === 'ruolo' ? (_capacitySortDir === 'asc' ? '▲' : '▼') : ''}</th>
                             ${months.map(m => `<th class="res-sat-month-th">${m.slice(5)}<br><small>${m.slice(0,4)}</small></th>`).join('')}
                         </tr>
                     </thead>
@@ -2123,6 +2137,20 @@ function _renderCapacity() {
             }
         });
     }
+
+    // Sort colonne tabella dettaglio persona
+    panel.querySelectorAll('.res-capacity-sort').forEach(th => {
+        th.addEventListener('click', () => {
+            const col = th.dataset.sort;
+            if (_capacitySortCol === col) {
+                _capacitySortDir = _capacitySortDir === 'asc' ? 'desc' : 'asc';
+            } else {
+                _capacitySortCol = col;
+                _capacitySortDir = 'asc';
+            }
+            _renderCapacity();
+        });
+    });
 
     // Searchable persona picker
     _initPersonaPicker(
