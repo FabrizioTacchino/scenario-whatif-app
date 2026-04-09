@@ -1,9 +1,15 @@
 const { app, BrowserWindow, Menu, dialog, ipcMain, shell } = require('electron');
 const { autoUpdater } = require('electron-updater');
+const log   = require('electron-log');
 const fs    = require('fs');
 const os    = require('os');
 const path  = require('path');
 const https = require('https');
+
+// Reindirizza i log di electron-updater su file (utile per debug in produzione)
+// File: %AppData%\analisi-scenari-vdp\logs\main.log
+autoUpdater.logger = log;
+autoUpdater.logger.transports.file.level = 'info';
 
 // ─── LICENZA LEMON SQUEEZY ────────────────────────────────────────────────────
 //
@@ -145,7 +151,131 @@ ipcMain.handle('license:getInfo',   ()        => getLicenseInfo());
 // IPC handlers — utilità
 ipcMain.handle('shell:openExternal', (_, url) => shell.openExternal(url));
 ipcMain.handle('app:getVersion',     ()        => app.getVersion());
-ipcMain.handle('updater:install',    ()        => autoUpdater.quitAndInstall());
+ipcMain.handle('window:focus', (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (win) {
+        win.blur();
+        setTimeout(() => {
+            win.focus();
+            win.webContents.focus();
+        }, 50);
+    }
+});
+// isSilent: false → mostra la UI del installer NSIS (progress bar visibile all'utente)
+// isForceRunAfter: true → l'app si riavvia automaticamente dopo l'installazione
+function findInstallerPath() {
+    // 1. Percorso salvato dall'evento update-downloaded
+    if (pendingInstallerPath && fs.existsSync(pendingInstallerPath)) {
+        return pendingInstallerPath;
+    }
+    // 2. Proprietà interna di electron-updater
+    const internal = autoUpdater._downloadedUpdateHelper?.installerPath;
+    if (internal && fs.existsSync(internal)) {
+        return internal;
+    }
+    // 3. Ricerca nella cartella cache di electron-updater
+    //    Percorso standard: %LOCALAPPDATA%\{appName}-updater\pending\  oppure  \{appName}-updater\
+    const localAppData = process.env.LOCALAPPDATA
+        || path.join(os.homedir(), 'AppData', 'Local');
+    const updaterDir = path.join(localAppData, `${app.getName()}-updater`);
+    for (const dir of [path.join(updaterDir, 'pending'), updaterDir]) {
+        try {
+            if (!fs.existsSync(dir)) continue;
+            const exes = fs.readdirSync(dir).filter(f => f.toLowerCase().endsWith('.exe'));
+            if (exes.length > 0) {
+                return path.join(dir, exes[0]);
+            }
+        } catch { /* ignora errori di accesso */ }
+    }
+    return null;
+}
+
+ipcMain.handle('updater:install', () => {
+    const installerPath = findInstallerPath();
+    log.info('[updater:install] installerPath trovato:', installerPath);
+
+    if (installerPath && fs.existsSync(installerPath)) {
+        try {
+            // Strategy: the batch kills the app, waits until it's dead,
+            // deletes the old uninstaller (which crashes with -1073740940),
+            // then launches the new installer.
+            const batchPath = path.join(os.tmpdir(), 'vdp-update.bat');
+            const batchLogPath = path.join(os.tmpdir(), 'vdp-update-log.txt');
+            const exeName = path.basename(process.execPath);
+            const installDir = path.dirname(process.execPath);
+            const uninstallerPath = path.join(installDir, 'Uninstall Analisi Scenari VDP.exe');
+            const batchContent = [
+                '@echo off',
+                `set LOGFILE="${batchLogPath}"`,
+                'echo [%date% %time%] === Update batch started === > %LOGFILE%',
+                // Kill the app
+                `echo [%date% %time%] Killing ${exeName} >> %LOGFILE%`,
+                `taskkill /IM "${exeName}" /F /T >> %LOGFILE% 2>&1`,
+                // Loop until the process is truly dead
+                ':waitloop',
+                'timeout /t 1 /nobreak >nul',
+                `tasklist /FI "IMAGENAME eq ${exeName}" 2>nul | find /I "${exeName}" >nul`,
+                'if %errorlevel% equ 0 (',
+                '  echo [%date% %time%] Process still alive, killing again >> %LOGFILE%',
+                `  taskkill /IM "${exeName}" /F /T >> %LOGFILE% 2>&1`,
+                '  goto waitloop',
+                ')',
+                'echo [%date% %time%] Process is dead >> %LOGFILE%',
+                // Wait for Defender to release file locks
+                'echo [%date% %time%] Waiting 5s for file locks >> %LOGFILE%',
+                'timeout /t 5 /nobreak >nul',
+                // Check if uninstaller exists
+                `if exist "${uninstallerPath}" (`,
+                '  echo [%date% %time%] Uninstaller EXISTS, deleting >> %LOGFILE%',
+                `  del /f /q "${uninstallerPath}" >> %LOGFILE% 2>&1`,
+                '  echo [%date% %time%] Del exit code: %errorlevel% >> %LOGFILE%',
+                ') else (',
+                '  echo [%date% %time%] Uninstaller NOT FOUND >> %LOGFILE%',
+                ')',
+                // Check if still exists after delete
+                `if exist "${uninstallerPath}" (`,
+                '  echo [%date% %time%] Still exists! Trying rename >> %LOGFILE%',
+                `  rename "${uninstallerPath}" uninstall.exe.old >> %LOGFILE% 2>&1`,
+                '  echo [%date% %time%] Rename exit code: %errorlevel% >> %LOGFILE%',
+                ')',
+                // Final check
+                `if exist "${uninstallerPath}" (`,
+                '  echo [%date% %time%] WARNING: uninstaller STILL EXISTS >> %LOGFILE%',
+                ') else (',
+                '  echo [%date% %time%] Uninstaller successfully removed >> %LOGFILE%',
+                ')',
+                'timeout /t 2 /nobreak >nul',
+                `echo [%date% %time%] Launching installer: ${installerPath} >> %LOGFILE%`,
+                `start "" "${installerPath}"`,
+                'echo [%date% %time%] Installer launched >> %LOGFILE%',
+            ].join('\r\n') + '\r\n';
+            fs.writeFileSync(batchPath, batchContent, 'utf8');
+            log.info('[updater:install] installDir:', installDir);
+            log.info('[updater:install] uninstaller to delete:', uninstallerPath);
+            log.info('[updater:install] batch log will be at:', batchLogPath);
+
+            const { spawn } = require('child_process');
+            spawn('cmd.exe', ['/c', 'start', '', '/min', 'cmd.exe', '/c', batchPath], {
+                detached: true,
+                stdio: 'ignore',
+            }).unref();
+
+            log.info('[updater:install] batch lanciato, chiusura app...');
+            BrowserWindow.getAllWindows().forEach(w => w.destroy());
+            setTimeout(() => app.exit(0), 500);
+        } catch (err) {
+            log.error('[updater:install] errore batch:', err);
+            _isUpdaterQuit = true;
+            BrowserWindow.getAllWindows().forEach(w => { try { w.destroy(); } catch {} });
+            setTimeout(() => autoUpdater.quitAndInstall(false, true), 500);
+        }
+    } else {
+        log.warn('[updater:install] percorso non trovato, uso quitAndInstall fallback');
+        _isUpdaterQuit = true;
+        BrowserWindow.getAllWindows().forEach(w => { try { w.destroy(); } catch {} });
+        setTimeout(() => autoUpdater.quitAndInstall(false, true), 500);
+    }
+});
 
 // ─── FINESTRA PRINCIPALE ──────────────────────────────────────────────────────
 // Modalità sviluppo: electron . --dev  →  carica da Vite dev server
@@ -169,6 +299,9 @@ function createWindow() {
     } else {
         win.loadFile(path.join(__dirname, 'dist', 'index.html'));
     }
+
+    // Ripristina il focus della tastiera quando la finestra torna in primo piano
+    win.on('focus', () => win.webContents.focus());
 
     // Apre i link esterni nel browser di sistema invece che in una nuova finestra Electron
     win.webContents.setWindowOpenHandler(({ url }) => {
@@ -215,7 +348,7 @@ function createWindow() {
                     label: 'Controlla aggiornamenti...',
                     click: async () => {
                         if (!app.isPackaged) {
-                            dialog.showMessageBox({
+                            dialog.showMessageBox(win, {
                                 type: 'info',
                                 title: 'Aggiornamenti',
                                 message: 'Controllo aggiornamenti disponibile solo nella versione installata.',
@@ -251,6 +384,8 @@ function createWindow() {
                         });
                         aboutWin.loadFile(path.join(__dirname, 'dist', 'about.html'));
                         aboutWin.setMenu(null);
+                        // Quando si chiude, restituisce il focus alla finestra principale
+                        aboutWin.on('closed', () => { if (!win.isDestroyed()) win.webContents.focus(); });
                     }
                 }
             ]
@@ -263,6 +398,7 @@ function createWindow() {
 
 // Flag condiviso: aggiornamento già scaricato (usato anche nel menu)
 let updateDownloaded = false;
+let pendingInstallerPath = null;  // path del file installer scaricato
 
 // Inizializza aggiornamenti automatici (solo in produzione)
 if (app.isPackaged) {
@@ -271,12 +407,14 @@ if (app.isPackaged) {
 
 function setupUpdater() {
     autoUpdater.autoDownload = true;
-    autoUpdater.autoInstallOnAppQuit = true;
+    autoUpdater.autoInstallOnAppQuit = false;  // evita EBUSY: installa solo su click esplicito
+    autoUpdater.disableWebInstaller = true;    // rimuove warning nei log
 
     autoUpdater.on('update-not-available', () => {
         if (autoUpdater._manualCheck) {
             autoUpdater._manualCheck = false;
-            dialog.showMessageBox({
+            const w = BrowserWindow.getAllWindows()[0];
+            dialog.showMessageBox(w || BrowserWindow.getFocusedWindow(), {
                 type: 'info',
                 title: 'Nessun aggiornamento',
                 message: 'Stai già usando la versione più recente.',
@@ -297,14 +435,19 @@ function setupUpdater() {
         if (win) win.webContents.send('updater:progress', Math.floor(progress.percent));
     });
 
-    autoUpdater.on('update-downloaded', () => {
+    autoUpdater.on('update-downloaded', (info) => {
         updateDownloaded = true;
+        pendingInstallerPath = info.downloadedFile || null;
+        log.info('[update-downloaded] downloadedFile:', pendingInstallerPath);
+        log.info('[update-downloaded] info keys:', Object.keys(info));
         const win = BrowserWindow.getAllWindows()[0];
         if (win) win.webContents.send('updater:ready');
     });
 
     autoUpdater.on('error', (err) => {
-        console.log('Errore aggiornamento:', err);
+        log.error('Errore aggiornamento:', err);
+        const w = BrowserWindow.getAllWindows()[0];
+        if (w) w.webContents.send('updater:error', err.message || String(err));
     });
 
     autoUpdater.checkForUpdates();
@@ -318,6 +461,14 @@ app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') {
         app.quit();
     }
+});
+
+// Force-kill on Windows: app.quit() sends WM_CLOSE but the process can linger.
+// Skip if auto-updater is handling the quit (quitAndInstall needs to launch the installer first).
+let _isUpdaterQuit = false;
+app.on('will-quit', () => {
+    if (_isUpdaterQuit) return; // let electron-updater handle its own quit flow
+    process.exit(0);
 });
 
 app.on('activate', () => {

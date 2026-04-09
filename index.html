@@ -80,15 +80,25 @@
         </svg>
         Seleziona File Excel
       </label>
-      <a href="/templates/Baseline_Template.xlsx" class="template-link" download>
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-          style="margin-right:4px;vertical-align:middle;">
-          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-          <polyline points="7 10 12 15 17 10" />
-          <line x1="12" y1="15" x2="12" y2="3" />
-        </svg>
-        Scarica Baseline Template
-      </a>
+      <div style="display:flex;gap:12px;align-items:center;margin-top:8px;">
+        <a href="/templates/Baseline_Template.xlsx" class="template-link" download style="margin-top:0;">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+            style="margin-right:4px;vertical-align:middle;">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+            <polyline points="7 10 12 15 17 10" />
+            <line x1="12" y1="15" x2="12" y2="3" />
+          </svg>
+          Scarica Template
+        </a>
+        <span style="color:var(--text-muted);font-size:12px;">oppure</span>
+        <button id="btn-cloud-from-upload" class="btn btn-outline btn-sm" style="display:inline-flex;align-items:center;gap:6px;">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" stroke-linejoin="round">
+            <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/>
+          </svg>
+          Accedi al Cloud
+        </button>
+      </div>
       <input type="file" id="file-input" accept=".xlsx,.xls" hidden />
       <div id="upload-progress" class="upload-progress hidden">
         <div class="progress-bar">
@@ -132,10 +142,16 @@
           </button>
 
           <input type="file" id="update-file-input" accept=".xlsx,.xls" hidden />
-          <button id="btn-duplicate-scenario" class="btn btn-ghost btn-sm" title="Duplica scenario">
+          <button id="btn-duplicate-scenario" class="btn btn-ghost btn-sm" title="Copia scenario">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <rect x="9" y="9" width="13" height="13" rx="2" />
               <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+            </svg>
+          </button>
+          <button id="btn-rename-scenario" class="btn btn-ghost btn-sm" title="Rinomina scenario">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+              <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
             </svg>
           </button>
           <button id="btn-delete-scenario" class="btn btn-danger btn-sm" title="Elimina scenario">
@@ -171,13 +187,35 @@
             </svg>
             Export
           </button>
-          <button id="btn-print" class="btn btn-outline btn-sm">
+          <button id="btn-report" class="btn btn-outline btn-sm">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <polyline points="6 9 6 2 18 2 18 9" />
-              <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" />
-              <rect x="6" y="14" width="12" height="8" />
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+              <polyline points="14 2 14 8 20 8"/>
+              <line x1="16" y1="13" x2="8" y2="13"/>
+              <line x1="16" y1="17" x2="8" y2="17"/>
+              <polyline points="10 9 9 9 8 9"/>
             </svg>
-            Stampa
+            Genera Report
+          </button>
+          <button id="btn-cloud-sync" class="btn btn-outline btn-sm cloud-sync-btn" title="Cloud Sync" style="margin-left: 4px;">
+            <svg id="cloud-icon-disconnected" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="1" y1="1" x2="23" y2="23"/>
+              <path d="M18.73 18.73A4.5 4.5 0 0 1 8 17.5H7a5 5 0 0 1-.64-9.95"/>
+              <path d="M9.2 9.2A4.5 4.5 0 0 1 18 13.5h.5a2.5 2.5 0 0 1 2 4"/>
+            </svg>
+            <svg id="cloud-icon-connected" class="hidden" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--success, #22c55e)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/>
+              <polyline points="8 14 12 18 20 10" stroke="var(--success, #22c55e)" stroke-width="2" fill="none"/>
+            </svg>
+            <svg id="cloud-icon-syncing" class="hidden cloud-spin" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/>
+              <path d="M12 6v6l4 2" opacity="0.5"/>
+            </svg>
+            <svg id="cloud-icon-error" class="hidden" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--danger, #ef4444)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/>
+              <line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+            </svg>
+            <span id="cloud-sync-label" style="font-size:11px;margin-left:2px;">Cloud</span>
           </button>
           <button id="btn-theme-toggle" class="btn btn-outline btn-sm" title="Cambia tema" style="margin-left: 4px;">
             <svg class="sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -207,6 +245,18 @@
       style="background:var(--warning,#f59e0b);color:#000;text-align:center;padding:6px 12px;font-size:13px;font-weight:500;">
     </div>
 
+    <!-- BANNER VIEWER (sola lettura) -->
+    <div id="viewer-banner" class="hidden"
+      style="background:var(--bg-2, #f5f5f5);color:var(--text-muted, #999);text-align:right;padding:3px 12px;font-size:10px;font-weight:400;opacity:.7;">
+      Sola lettura
+    </div>
+
+    <!-- BANNER TESTER (sandbox locale) -->
+    <div id="tester-banner" class="hidden"
+      style="background:#fef3c7;color:#92400e;text-align:right;padding:3px 12px;font-size:10px;font-weight:500;opacity:.85;">
+      Modalit&agrave; Test &mdash; gli scenari vengono inviati come bozze (approvazione admin richiesta)
+    </div>
+
     <!-- BANNER AGGIORNAMENTO -->
     <div id="update-banner" class="update-banner hidden">
       <div class="update-banner-inner">
@@ -215,7 +265,10 @@
           <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>
           <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
         </svg>
-        <span id="update-banner-text">Scaricamento aggiornamento...</span>
+        <div class="update-banner-content">
+          <span id="update-banner-label" class="update-banner-label">La tua app si sta aggiornando</span>
+          <span id="update-banner-text" class="update-banner-detail">Scaricamento in corso...</span>
+        </div>
         <div id="update-progress-wrap" class="update-progress-wrap">
           <div class="update-progress-track">
             <div id="update-progress-fill" class="update-progress-fill"></div>
@@ -223,7 +276,7 @@
           <span id="update-progress-pct" class="update-progress-pct">0%</span>
         </div>
         <div id="update-actions" class="update-actions hidden">
-          <button id="btn-update-install" class="btn btn-primary btn-sm">Riavvia ora</button>
+          <button id="btn-update-install" class="btn btn-primary btn-sm">Installa e riavvia</button>
           <button id="btn-update-later" class="btn btn-ghost btn-sm">Più tardi</button>
         </div>
       </div>
@@ -249,6 +302,14 @@
       <div class="filter-group">
         <label>A</label>
         <input type="month" id="filter-date-to" />
+      </div>
+      <div class="filter-group year-shortcuts">
+        <label>Anno</label>
+        <button class="btn btn-year-shortcut btn-sm" data-year="2026">2026</button>
+        <button class="btn btn-year-shortcut btn-sm" data-year="2027">2027</button>
+        <button class="btn btn-year-shortcut btn-sm" data-year="2028">2028</button>
+        <button class="btn btn-year-shortcut btn-sm" data-year="2029">2029</button>
+        <button class="btn btn-year-shortcut btn-sm" data-year="2030">2030</button>
       </div>
       <button id="btn-reset-filters" class="btn btn-ghost btn-sm">Reset Filtri</button>
 
@@ -300,6 +361,7 @@
 
       <!-- MAIN CONTENT -->
       <main class="main-content">
+
         <!-- TAB NAV -->
         <div class="tab-nav">
           <button class="tab-btn active" data-tab="dashboard">
@@ -317,7 +379,15 @@
               <line x1="3" y1="9" x2="21" y2="9"/>
               <line x1="9" y1="9" x2="9" y2="21"/>
             </svg>
-            Details
+            Details Commessa
+          </button>
+          <button class="tab-btn" data-tab="details-type">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="3" y="3" width="18" height="18" rx="2"/>
+              <line x1="3" y1="9" x2="21" y2="9"/>
+              <line x1="9" y1="9" x2="9" y2="21"/>
+            </svg>
+            Details Type
           </button>
           <button class="tab-btn" data-tab="analisi">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -325,30 +395,36 @@
               <line x1="12" y1="20" x2="12" y2="4" />
               <line x1="6" y1="20" x2="6" y2="14" />
             </svg>
-            Analisi Annualità
-          </button>
-          <button class="tab-btn" data-tab="commessa">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <rect x="3" y="3" width="18" height="4" rx="1"/>
-              <rect x="3" y="10" width="13" height="4" rx="1"/>
-              <rect x="3" y="17" width="9" height="4" rx="1"/>
-            </svg>
-            Analisi Commessa
-          </button>
-          <button class="tab-btn" data-tab="type-settore">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <circle cx="9" cy="9" r="6"/>
-              <path d="M15 15l5 5"/>
-              <path d="M9 6v6M6 9h6"/>
-            </svg>
-            Analisi Type &amp; Settore
+            Comparison Annualità
           </button>
           <button class="tab-btn" data-tab="assumptions">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
               <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
             </svg>
-            Assunzioni Scenario
+            Assunzioni Scenario Selezionato
+          </button>
+          <button class="tab-btn" data-tab="scenario-compare">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="2" y="3" width="9" height="18" rx="1"/>
+              <rect x="13" y="3" width="9" height="18" rx="1"/>
+            </svg>
+            Comparison Scenari
+          </button>
+          <button class="tab-btn" data-tab="risorse">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+              <circle cx="9" cy="7" r="4"/>
+              <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+              <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+            </svg>
+            Risorse
+          </button>
+          <button class="tab-btn hidden" data-tab="gestione-scenari" id="tab-btn-gestione-scenari">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+            </svg>
+            Gestione Scenari
           </button>
         </div>
 
@@ -376,37 +452,67 @@
             </div>
           </div>
 
+          <!-- KPI ROW COMPARE (visibile solo in modalità confronto) -->
+          <div id="kpi-row-compare" class="kpi-row-compare hidden"></div>
+
           <!-- CHARTS -->
           <div class="charts-grid">
-            <div class="chart-card">
+            <div class="chart-card" style="position:relative;">
               <h3>VDP Mensile</h3>
+              <button class="chart-download-btn" data-chart="vdp-monthly" title="Scarica dati Excel"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></button>
               <div class="chart-wrap"><canvas id="chart-vdp-monthly"></canvas></div>
             </div>
-            <div class="chart-card">
+            <div class="chart-card" style="position:relative;">
               <h3>VDP Cumulata</h3>
+              <button class="chart-download-btn" data-chart="vdp-cumulative" title="Scarica dati Excel"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></button>
               <div class="chart-wrap"><canvas id="chart-vdp-cumulative"></canvas></div>
             </div>
-            <div class="chart-card">
+            <div class="chart-card" style="position:relative;">
               <h3>Margine Mensile</h3>
+              <button class="chart-download-btn" data-chart="margin-monthly" title="Scarica dati Excel"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></button>
               <div class="chart-wrap"><canvas id="chart-margin-monthly"></canvas></div>
             </div>
-            <div class="chart-card">
+            <div class="chart-card" style="position:relative;">
               <h3>Margine Cumulato</h3>
+              <button class="chart-download-btn" data-chart="margin-cumulative" title="Scarica dati Excel"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></button>
               <div class="chart-wrap"><canvas id="chart-margin-cumulative"></canvas></div>
             </div>
           </div>
         </div>
 
-        <!-- DETAILS TAB -->
+        <!-- DETAILS COMMESSA TAB -->
         <div id="tab-details" class="tab-panel">
           <div class="charts-grid">
-            <div class="chart-card" style="grid-column: span 2;">
+            <div class="chart-card" style="grid-column: span 2; position:relative;">
               <h3>VDP Mensile — Dettaglio per Commessa (Scenario)</h3>
+              <button class="chart-download-btn" data-chart="details-vdp" title="Scarica dati Excel"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></button>
               <div class="chart-wrap" style="min-height:380px;"><canvas id="chart-details-vdp"></canvas></div>
             </div>
-            <div class="chart-card" style="grid-column: span 2;">
+            <div class="chart-card" style="grid-column: span 2; position:relative;">
               <h3>Margine Mensile — Dettaglio per Commessa (Scenario)</h3>
+              <button class="chart-download-btn" data-chart="details-mar" title="Scarica dati Excel"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></button>
               <div class="chart-wrap" style="min-height:380px;"><canvas id="chart-details-mar"></canvas></div>
+            </div>
+          </div>
+          <!-- Tabelle dettaglio commessa -->
+          <details style="margin-top:8px;">
+            <summary style="cursor:pointer;font-size:13px;color:var(--text-muted);margin:8px 0;">Tabelle dettaglio (mostra/nascondi)</summary>
+            <div id="details-tables-container"></div>
+          </details>
+        </div>
+
+        <!-- DETAILS TYPE TAB -->
+        <div id="tab-details-type" class="tab-panel">
+          <div class="charts-grid">
+            <div class="chart-card" style="grid-column: span 2; position:relative;">
+              <h3>VDP Mensile — Dettaglio per Type (Scenario)</h3>
+              <button class="chart-download-btn" data-chart="details-type-vdp" title="Scarica dati Excel"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></button>
+              <div class="chart-wrap" style="min-height:380px;"><canvas id="chart-details-type-vdp"></canvas></div>
+            </div>
+            <div class="chart-card" style="grid-column: span 2; position:relative;">
+              <h3>Margine Mensile — Dettaglio per Type (Scenario)</h3>
+              <button class="chart-download-btn" data-chart="details-type-mar" title="Scarica dati Excel"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></button>
+              <div class="chart-wrap" style="min-height:380px;"><canvas id="chart-details-type-mar"></canvas></div>
             </div>
           </div>
         </div>
@@ -414,65 +520,55 @@
         <!-- ANALISI TAB -->
         <div id="tab-analisi" class="tab-panel">
           <div class="charts-grid">
-            <div class="chart-card">
+            <div class="chart-card" style="position:relative;">
               <h3>VDP per Anno — Baseline vs Scenario</h3>
+              <button class="chart-download-btn" data-chart="vdp-yearly" title="Scarica dati Excel"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></button>
               <div class="chart-wrap"><canvas id="chart-vdp-yearly"></canvas></div>
             </div>
-            <div class="chart-card">
+            <div class="chart-card" style="position:relative;">
               <h3>VDP Scenario per Tipo (Backlog vs Order Intake)</h3>
+              <button class="chart-download-btn" data-chart="vdp-type" title="Scarica dati Excel"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></button>
               <div class="chart-wrap"><canvas id="chart-vdp-type"></canvas></div>
             </div>
-            <div class="chart-card">
+            <div class="chart-card" style="position:relative;">
               <h3>Margine per Anno — Baseline vs Scenario</h3>
+              <button class="chart-download-btn" data-chart="margin-yearly" title="Scarica dati Excel"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></button>
               <div class="chart-wrap"><canvas id="chart-margin-yearly"></canvas></div>
             </div>
-            <div class="chart-card">
+            <div class="chart-card" style="position:relative;">
               <h3>Margine Scenario per Tipo (Backlog vs Order Intake)</h3>
+              <button class="chart-download-btn" data-chart="margin-type" title="Scarica dati Excel"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></button>
               <div class="chart-wrap"><canvas id="chart-margin-type"></canvas></div>
             </div>
-          </div>
-        </div>
-
-        <!-- ANALISI COMMESSA TAB -->
-        <div id="tab-commessa" class="tab-panel">
-          <div class="charts-grid">
-            <div class="chart-card" style="grid-column: span 2;">
-              <h3>Delta VDP per Commessa — Scenario vs Baseline</h3>
-              <div class="chart-wrap" id="wrap-delta-vdp" style="min-height:320px;"><canvas id="chart-delta-vdp"></canvas></div>
+            <div class="chart-card" style="grid-column: span 2; position:relative;">
+              <h3>Waterfall VDP — Delta per Commessa</h3>
+              <button class="chart-download-btn" data-chart="waterfall-vdp" title="Scarica dati Excel"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></button>
+              <div class="chart-wrap" id="wrap-wf-vdp" style="min-height:320px;"><canvas id="chart-wf-vdp"></canvas></div>
             </div>
-            <div class="chart-card" style="grid-column: span 2;">
-              <h3>Delta Margine per Commessa — Scenario vs Baseline</h3>
-              <div class="chart-wrap" id="wrap-delta-mar" style="min-height:320px;"><canvas id="chart-delta-mar"></canvas></div>
+            <div class="chart-card" style="grid-column: span 2; position:relative;">
+              <h3>Waterfall Margine — Delta per Commessa</h3>
+              <button class="chart-download-btn" data-chart="waterfall-mar" title="Scarica dati Excel"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></button>
+              <div class="chart-wrap" id="wrap-wf-mar" style="min-height:320px;"><canvas id="chart-wf-mar"></canvas></div>
             </div>
-          </div>
-        </div>
-
-        <!-- ANALISI TYPE & SETTORE TAB -->
-        <div id="tab-type-settore" class="tab-panel">
-          <div class="charts-grid">
-            <div class="chart-card">
-              <h3>VDP per Tipo — Baseline vs Scenario</h3>
-              <div class="chart-wrap" style="min-height:280px;"><canvas id="chart-type-comparison"></canvas></div>
-            </div>
-            <div class="chart-card">
+            <div class="chart-card" style="position:relative;">
               <h3>Commesse con cambio Type</h3>
+              <button class="chart-download-btn" data-chart="type-changes" title="Scarica dati Excel"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></button>
               <div class="chart-wrap" id="wrap-type-changes" style="min-height:280px;"><canvas id="chart-type-changes"></canvas></div>
             </div>
-            <div class="chart-card">
-              <h3>VDP Scenario per Settore &times; Tipo</h3>
-              <div class="chart-wrap"><canvas id="chart-settore-type"></canvas></div>
-            </div>
-            <div class="chart-card">
+            <div class="chart-card" style="position:relative;">
               <h3>VDP Scenario per Settore</h3>
+              <button class="chart-download-btn" data-chart="settore-pie" title="Scarica dati Excel"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></button>
               <div class="chart-wrap"><canvas id="chart-settore-pie"></canvas></div>
             </div>
           </div>
         </div>
 
+
+
         <!-- ASSUMPTIONS TAB -->
         <div id="tab-assumptions" class="tab-panel">
           <div class="assumptions-toolbar">
-            <h2>Assunzioni Scenario</h2>
+            <h2>Assunzioni Scenario Selezionato</h2>
             <div class="assumptions-actions">
               <label class="toggle-label">
                 <input type="checkbox" id="chk-show-modified" /> Solo modificate
@@ -538,9 +634,192 @@
             </table>
           </div>
         </div>
+
+        <!-- SCENARIO COMPARISON TAB -->
+        <div id="tab-scenario-compare" class="tab-panel">
+          <div class="scen-compare-top">
+            <div class="scen-compare-selectors">
+              <div class="scen-compare-selector-group">
+                <label class="scen-compare-label">Scenario A</label>
+                <select id="compare-scen-a" class="scen-compare-select"></select>
+              </div>
+              <div class="scen-compare-vs">VS</div>
+              <div class="scen-compare-selector-group">
+                <label class="scen-compare-label">Scenario B</label>
+                <select id="compare-scen-b" class="scen-compare-select"></select>
+              </div>
+              <button class="chart-download-btn scen-compare-export-btn" data-chart="scen-compare-table" title="Scarica tabella Excel"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></button>
+            </div>
+            <div id="scen-compare-kpis" class="scen-compare-kpis"></div>
+          </div>
+          <div class="table-container">
+            <table id="scen-compare-table" class="assumptions-table scen-compare-table">
+              <thead>
+                <tr>
+                  <th data-sort="codice" class="sortable">Codice</th>
+                  <th data-sort="nome" class="sortable">Commessa</th>
+                  <th data-sort="typeA" class="sortable col-type">Tipo A</th>
+                  <th data-sort="typeB" class="sortable col-type">Tipo B</th>
+                  <th data-sort="probA" class="sortable col-num">Prob A %</th>
+                  <th data-sort="probB" class="sortable col-num">Prob B %</th>
+                  <th data-sort="vdpA" class="sortable col-num">VDP A</th>
+                  <th data-sort="vdpB" class="sortable col-num">VDP B</th>
+                  <th data-sort="deltaVdp" class="sortable col-num scen-delta-head">Δ VDP</th>
+                  <th data-sort="margPercA" class="sortable col-num">Marg% A</th>
+                  <th data-sort="margPercB" class="sortable col-num">Marg% B</th>
+                  <th data-sort="deltaMar" class="sortable col-num scen-delta-head">Δ Margine</th>
+                </tr>
+              </thead>
+              <tbody id="scen-compare-tbody"></tbody>
+            </table>
+          </div>
+
+          <!-- Waterfall & Delta-rank charts -->
+          <div class="scen-compare-charts-grid">
+            <div class="chart-card" style="position:relative;">
+              <h3 id="scen-waterfall-title">Bridge VDP</h3>
+              <div class="chart-wrap" style="min-height:300px;"><canvas id="chart-scen-waterfall"></canvas></div>
+            </div>
+            <div class="chart-card" style="position:relative;">
+              <div class="chart-title-row">
+                <h3>Top Δ VDP per Commessa</h3>
+                <div class="top-n-pills" id="top-n-vdp">
+                  <button class="top-n-btn" data-n="5">5</button>
+                  <button class="top-n-btn" data-n="10">10</button>
+                  <button class="top-n-btn active" data-n="15">15</button>
+                  <button class="top-n-btn" data-n="0">Tutte</button>
+                </div>
+              </div>
+              <div class="chart-wrap" style="min-height:300px;"><canvas id="chart-scen-delta-rank"></canvas></div>
+            </div>
+            <div class="chart-card" style="position:relative;">
+              <h3 id="scen-waterfall-mar-title">Bridge Margine</h3>
+              <div class="chart-wrap" style="min-height:300px;"><canvas id="chart-scen-waterfall-mar"></canvas></div>
+            </div>
+            <div class="chart-card" style="position:relative;">
+              <div class="chart-title-row">
+                <h3>Top Δ Margine per Commessa</h3>
+                <div class="top-n-pills" id="top-n-mar">
+                  <button class="top-n-btn" data-n="5">5</button>
+                  <button class="top-n-btn" data-n="10">10</button>
+                  <button class="top-n-btn active" data-n="15">15</button>
+                  <button class="top-n-btn" data-n="0">Tutte</button>
+                </div>
+              </div>
+              <div class="chart-wrap" style="min-height:300px;"><canvas id="chart-scen-delta-rank-mar"></canvas></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- RISORSE TAB -->
+        <div id="tab-risorse" class="tab-panel">
+          <div class="res-sub-nav">
+            <button class="res-sub-btn" data-restab="ruoli">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="8.5" cy="7" r="4"/><path d="M20 8v6"/><path d="M23 11h-6"/>
+              </svg>
+              Ruoli
+            </button>
+            <button class="res-sub-btn active" data-restab="persone">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>
+              </svg>
+              Persone
+            </button>
+            <button class="res-sub-btn" data-restab="pianificazione">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>
+              </svg>
+              Pianificazione
+            </button>
+            <button class="res-sub-btn" data-restab="commesse">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/>
+              </svg>
+              Economics
+            </button>
+            <button class="res-sub-btn" data-restab="capacity">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>
+              </svg>
+              Capacity
+            </button>
+            <div class="res-sub-nav-export">
+              <button id="btn-res-export-excel" class="btn btn-outline btn-sm">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                  <polyline points="14 2 14 8 20 8"/>
+                  <line x1="16" y1="13" x2="8" y2="13"/>
+                  <line x1="16" y1="17" x2="8" y2="17"/>
+                  <polyline points="10 9 9 9 8 9"/>
+                </svg>
+                Esporta Excel
+              </button>
+            </div>
+          </div>
+          <div class="res-content">
+            <div id="res-tab-ruoli" class="res-tab-panel"></div>
+            <div id="res-tab-persone" class="res-tab-panel active"></div>
+            <div id="res-tab-pianificazione" class="res-tab-panel"></div>
+            <div id="res-tab-commesse" class="res-tab-panel"></div>
+            <div id="res-tab-capacity" class="res-tab-panel"></div>
+          </div>
+        </div>
+
+        <!-- GESTIONE SCENARI TAB (admin only) -->
+        <div id="tab-gestione-scenari" class="tab-panel">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+            <h2 style="margin:0;font-size:18px;font-weight:700;">Gestione Scenari</h2>
+            <button id="btn-refresh-gestione" class="btn btn-outline btn-sm">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>
+                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+              </svg>
+              Aggiorna da Cloud
+            </button>
+          </div>
+          <!-- Filtri e ricerca -->
+          <div class="gestione-toolbar">
+            <div class="gestione-filters">
+              <button class="gestione-filter-btn active" data-filter="all">Tutti</button>
+              <button class="gestione-filter-btn" data-filter="active">Attivi</button>
+              <button class="gestione-filter-btn" data-filter="draft">Bozze</button>
+              <button class="gestione-filter-btn" data-filter="locked">Bloccati</button>
+              <button class="gestione-filter-btn" data-filter="deleted">Eliminati</button>
+            </div>
+            <div class="gestione-search">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+              </svg>
+              <input type="text" id="gestione-search-input" placeholder="Cerca per nome o creatore..." />
+            </div>
+          </div>
+          <div id="gestione-scenari-container">
+            <p style="color:var(--text-secondary);font-size:13px;">Seleziona questo tab per caricare gli scenari dal cloud.</p>
+          </div>
+        </div>
+
       </main>
     </div> <!-- end .app-container -->
   </div> <!-- end #app -->
+
+  <!-- GESTIONE SCENARI CONFIRM MODAL -->
+  <div id="gestione-confirm-modal" class="modal hidden">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content modal-sm">
+      <div class="modal-header">
+        <h2 id="gestione-confirm-title">Conferma</h2>
+        <button class="modal-close" id="gestione-confirm-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p id="gestione-confirm-text"></p>
+        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px;">
+          <button id="gestione-confirm-cancel" class="btn btn-ghost btn-sm">Annulla</button>
+          <button id="gestione-confirm-ok" class="btn btn-primary btn-sm">Conferma</button>
+        </div>
+      </div>
+    </div>
+  </div>
 
   <!-- COMPARE MODAL -->
   <div id="compare-modal" class="modal hidden">
@@ -581,6 +860,146 @@
     </div>
   </div>
 
+  <!-- UPDATE CONFIRM MODAL -->
+  <div id="update-confirm-modal" class="modal hidden">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content modal-sm">
+      <div class="modal-header">
+        <h2>Installa aggiornamento</h2>
+        <button class="modal-close" id="update-confirm-modal-close">&times;</button>
+      </div>
+      <div class="modal-body" style="display:flex;flex-direction:column;gap:12px;">
+        <p style="margin:0;">L'installazione avviene tramite il programma di setup di Windows e richiede <strong>2–3 minuti</strong>.</p>
+        <ul style="margin:0;padding-left:20px;color:var(--text-muted);font-size:13px;line-height:1.7">
+          <li>L'app si chiuderà e si aprirà una finestra di installazione</li>
+          <li>Non chiudere la finestra di installazione e non spegnere il computer</li>
+          <li>Al termine, l'app si riaprirà automaticamente</li>
+        </ul>
+        <div style="display:flex;gap:8px;margin-top:4px;">
+          <button id="btn-update-confirm-ok" class="btn btn-primary" style="flex:1;">Procedi</button>
+          <button id="btn-update-confirm-cancel" class="btn btn-ghost" style="flex:1;">Annulla</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- DUPLICATE SCENARIO MODAL -->
+  <div id="duplicate-scenario-modal" class="modal hidden">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content modal-sm">
+      <div class="modal-header">
+        <h2>Copia Scenario</h2>
+        <button class="modal-close" id="duplicate-scenario-modal-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label for="duplicate-scenario-name">Nome</label>
+          <input type="text" id="duplicate-scenario-name" placeholder="Es. Scenario Ottimistico (copia)" />
+        </div>
+        <div class="form-group">
+          <label for="duplicate-scenario-notes">Note</label>
+          <textarea id="duplicate-scenario-notes" rows="3" placeholder="Descrizione opzionale..."></textarea>
+        </div>
+        <button id="btn-confirm-duplicate" class="btn btn-primary" style="width:100%;margin-top:12px;">Copia Scenario</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- RENAME SCENARIO MODAL -->
+  <div id="rename-scenario-modal" class="modal hidden">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content modal-sm">
+      <div class="modal-header">
+        <h2>Rinomina Scenario</h2>
+        <button class="modal-close" id="rename-scenario-modal-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label for="rename-scenario-name">Nome</label>
+          <input type="text" id="rename-scenario-name" placeholder="Nome scenario" />
+        </div>
+        <div class="form-group">
+          <label for="rename-scenario-notes">Note</label>
+          <textarea id="rename-scenario-notes" rows="3" placeholder="Descrizione opzionale..."></textarea>
+        </div>
+        <button id="btn-confirm-rename" class="btn btn-primary" style="width:100%;margin-top:12px;">Salva</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- REPORT MODAL -->
+  <div id="report-modal" class="modal hidden">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content modal-sm">
+      <div class="modal-header">
+        <h2>Genera Report PDF</h2>
+        <button class="modal-close" id="report-modal-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="report-section-title">Sezioni da includere</div>
+        <div class="report-options">
+          <label class="report-option">
+            <input type="checkbox" id="rpt-dashboard" checked />
+            <div>
+              <strong>Dashboard</strong>
+              <span>KPI principali e grafici scenario</span>
+            </div>
+          </label>
+          <label class="report-option">
+            <input type="checkbox" id="rpt-scenario" checked />
+            <div>
+              <strong>Dettaglio Scenario</strong>
+              <span>Tabella commesse con VDP, margini, probabilità</span>
+            </div>
+          </label>
+          <label class="report-option">
+            <input type="checkbox" id="rpt-economics" checked />
+            <div>
+              <strong>Economics</strong>
+              <span>Costi risorse per commessa + totale</span>
+            </div>
+          </label>
+          <label class="report-option">
+            <input type="checkbox" id="rpt-capacity" checked />
+            <div>
+              <strong>Capacity</strong>
+              <span>Saturazione team e dettaglio per persona</span>
+            </div>
+          </label>
+          <label class="report-option">
+            <input type="checkbox" id="rpt-pianificazione" checked />
+            <div>
+              <strong>Pianificazione</strong>
+              <span>Lista allocazioni risorse</span>
+            </div>
+          </label>
+          <label class="report-option">
+            <input type="checkbox" id="rpt-persone" checked />
+            <div>
+              <strong>Anagrafica Persone</strong>
+              <span>Elenco risorse con ruolo, stato, date</span>
+            </div>
+          </label>
+        </div>
+        <hr style="margin:12px 0;border-color:var(--border);">
+        <label class="report-option">
+          <input type="checkbox" id="rpt-use-filters" checked />
+          <div>
+            <strong>Applica filtri attivi</strong>
+            <span>Usa periodo e commesse selezionate</span>
+          </div>
+        </label>
+        <button id="btn-generate-report" class="btn btn-primary" style="width:100%;margin-top:14px;">
+          Genera PDF
+        </button>
+        <div id="report-progress" style="display:none;margin-top:10px;">
+          <div class="report-progress-bar"><div class="report-progress-fill" id="report-progress-fill"></div></div>
+          <div id="report-progress-text" style="font-size:.78rem;color:var(--text-secondary);margin-top:4px;text-align:center;"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- EXPORT MODAL -->
   <div id="export-modal" class="modal hidden">
     <div class="modal-backdrop"></div>
@@ -590,20 +1009,428 @@
         <button class="modal-close" id="export-modal-close">&times;</button>
       </div>
       <div class="modal-body">
-        <button id="btn-export-template" class="btn btn-primary" style="width:100%;margin-bottom:8px;">
-          📋 Esporta Template Reimportabile (.xlsx)
+        <button id="btn-export-template" class="btn btn-outline" style="width:100%;margin-bottom:8px;">
+          📋 Esporta Scenario Selezionato Reimportabile (.xlsx)
         </button>
-        <button id="btn-export-xlsx" class="btn btn-outline" style="width:100%;margin-bottom:8px;">
-          📊 Esporta Riepilogo Excel (.xlsx)
+        <hr style="margin:12px 0;border-color:var(--border);">
+        <p style="font-size:.8rem;color:var(--text-secondary);margin:0 0 8px;">Backup selettivo</p>
+        <div class="backup-options">
+          <label class="backup-option">
+            <input type="checkbox" id="bkp-scenari" checked />
+            <div>
+              <strong>Scenari</strong>
+              <span>Baseline AOP + tutti gli scenari</span>
+            </div>
+          </label>
+          <label class="backup-option">
+            <input type="checkbox" id="bkp-risorse" checked />
+            <div>
+              <strong>Risorse</strong>
+              <span>Persone, allocazioni, audit</span>
+            </div>
+          </label>
+          <label class="backup-option">
+            <input type="checkbox" id="bkp-preferenze" />
+            <div>
+              <strong>Preferenze</strong>
+              <span>Tema, zoom, stati banner</span>
+            </div>
+          </label>
+        </div>
+        <button id="btn-backup-export" class="btn btn-outline" style="width:100%;margin-top:10px;margin-bottom:8px;">
+          Esporta Backup (.json)
         </button>
-        <button id="btn-export-csv" class="btn btn-outline" style="width:100%;">
-          📄 Esporta CSV
+        <button id="btn-backup-import" class="btn btn-outline" style="width:100%;">
+          Importa Backup (.json)
         </button>
+        <input type="file" id="backup-file-input" accept=".json" style="display:none;">
       </div>
     </div>
   </div>
 
 
+
+  <!-- ── RISORSE: PERSONA MODAL ── -->
+  <div id="res-persona-modal" class="modal hidden">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content" style="max-width:640px;">
+      <div class="modal-header">
+        <h2 id="res-pm-title">Nuova Persona</h2>
+        <button class="modal-close" id="res-persona-modal-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="res-form-grid">
+          <!-- Anagrafica -->
+          <div class="res-span-2 res-form-section-label">Anagrafica</div>
+          <div class="form-group res-span-1">
+            <label>Cognome <span class="res-required">*</span></label>
+            <input type="text" id="res-pm-cognome" placeholder="ROSSI" />
+          </div>
+          <div class="form-group res-span-1">
+            <label>Nome <span class="res-required">*</span></label>
+            <input type="text" id="res-pm-nome" placeholder="Mario" />
+          </div>
+          <div class="form-group res-span-1">
+            <label>Codice Fiscale</label>
+            <input type="text" id="res-pm-cf" placeholder="RSSMRA..." />
+          </div>
+          <div class="form-group res-span-1">
+            <label>Ruolo / Mansione</label>
+            <select id="res-pm-ruolo">
+              <option value="">— Seleziona ruolo —</option>
+            </select>
+          </div>
+          <!-- Contratto -->
+          <div class="res-span-2 res-form-section-label">Contratto</div>
+          <div class="form-group res-span-1">
+            <label>Tipo Contratto</label>
+            <select id="res-pm-contratto">
+              <option>DIPENDENTE</option>
+              <option>INTERINALE</option>
+              <option>P. IVA</option>
+              <option>COLLABORATORE</option>
+              <option>ALTRO</option>
+            </select>
+          </div>
+          <div class="form-group res-span-1">
+            <label>Società</label>
+            <input type="text" id="res-pm-societa" placeholder="B4T" />
+          </div>
+          <div class="form-group res-span-1">
+            <label>BU</label>
+            <input type="text" id="res-pm-bu" placeholder="BU-GC" />
+          </div>
+          <div class="form-group res-span-1">
+            <label>CDC</label>
+            <input type="text" id="res-pm-cdc" placeholder="PROD" />
+          </div>
+          <div class="form-group res-span-1">
+            <label>Stato assunzione</label>
+            <select id="res-pm-stato-assunzione">
+              <option value="assunta">Assunta</option>
+              <option value="in_ingresso">In ingresso</option>
+              <option value="da_ricercare">Da ricercare</option>
+            </select>
+          </div>
+          <!-- Dati economici -->
+          <div class="res-span-2 res-form-section-label">Dati economici</div>
+          <div class="form-group res-span-1">
+            <label>Costo Medio Mese (€)</label>
+            <input type="number" id="res-pm-costo" min="0" step="100" placeholder="5000" />
+          </div>
+          <div class="form-group res-span-1">
+            <label>Data Assunzione</label>
+            <input type="month" id="res-pm-data-ass" />
+          </div>
+          <div class="form-group res-span-2 res-termine-row">
+            <div class="res-termine-inner">
+              <div class="form-group" style="margin:0;">
+                <label>Data Termine</label>
+                <input type="month" id="res-pm-data-term" />
+              </div>
+            </div>
+          </div>
+          <!-- Note -->
+          <div class="form-group res-span-2">
+            <label>Note</label>
+            <textarea id="res-pm-note" rows="2" placeholder="Note opzionali..."></textarea>
+          </div>
+        </div>
+        <div id="res-pm-error" class="res-modal-error"></div>
+        <button id="btn-res-pm-save" class="btn btn-primary" style="width:100%;margin-top:12px;">Salva</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── RISORSE: ALLOCAZIONE MODAL ── -->
+  <div id="res-alloc-modal" class="modal hidden">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content modal-sm" style="max-width:620px;">
+      <div class="modal-header">
+        <h2 id="res-alloc-title">Nuova Allocazione</h2>
+        <button class="modal-close" id="res-alloc-modal-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label>Persona <span class="res-required">*</span></label>
+          <input type="hidden" id="res-alloc-persona">
+          <div class="res-persona-picker" id="res-alloc-persona-picker">
+            <input type="text" id="res-alloc-persona-search" class="res-search-input"
+              placeholder="Cerca persona…" autocomplete="off" />
+            <div class="res-picker-dropdown" id="res-alloc-persona-list"></div>
+          </div>
+        </div>
+        <div id="res-alloc-termine-warn" class="res-termine-warn" style="display:none;"></div>
+        <div class="form-group">
+          <label>Commessa <span class="res-required">*</span></label>
+          <input type="hidden" id="res-alloc-commessa">
+          <div class="res-persona-picker" id="res-alloc-commessa-picker">
+            <input type="text" id="res-alloc-commessa-search" class="res-search-input"
+              placeholder="Cerca commessa…" autocomplete="off" />
+            <div class="res-picker-dropdown" id="res-alloc-commessa-list"></div>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Scenario</label>
+          <select id="res-alloc-scenario-modal"></select>
+        </div>
+        <div class="res-perc-row">
+          <div class="form-group" style="flex:0 0 auto;">
+            <label>Percentuale % <span class="res-required">*</span></label>
+            <input type="number" id="res-alloc-perc" min="1" max="100" step="5" value="100" style="width:80px;" />
+          </div>
+          <div class="form-group" style="flex:1 1 auto;">
+            <label>&nbsp;</label>
+            <div id="res-alloc-costo-preview" class="res-costo-preview"></div>
+          </div>
+        </div>
+        <div class="res-form-grid" style="grid-template-columns:1fr 1fr;gap:12px;">
+          <div class="form-group">
+            <label>Data Inizio <span class="res-required">*</span></label>
+            <div class="res-date-magnet-row">
+              <input type="month" id="res-alloc-di" />
+              <button type="button" id="btn-magnet-di" class="btn-magnet" title="Aggancia alla data di inizio della commessa nello scenario">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 15L3 12l9-9 9 9-3 3"/><path d="M6 15l3 3a9 9 0 0 0 9-9"/><line x1="12" y1="12" x2="12" y2="21"/></svg>
+              </button>
+              <input type="checkbox" id="chk-aggancio-di" class="res-aggancio-chk" title="Mantieni agganciato" />
+            </div>
+            <div class="res-delta-row" id="res-delta-di-wrap">
+              <span class="res-delta-label">Anticipo/Posticipo (mesi)</span>
+              <input type="number" id="res-delta-di" class="res-delta-input" value="0" min="-24" max="24" step="1" title="Negativo = anticipa, Positivo = posticipa" />
+              <span class="res-delta-hint" id="res-delta-di-hint"></span>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Data Fine <span class="res-required">*</span></label>
+            <div class="res-date-magnet-row">
+              <input type="month" id="res-alloc-df" />
+              <button type="button" id="btn-magnet-df" class="btn-magnet" title="Aggancia alla data di fine della commessa nello scenario">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 15L3 12l9-9 9 9-3 3"/><path d="M6 15l3 3a9 9 0 0 0 9-9"/><line x1="12" y1="12" x2="12" y2="21"/></svg>
+              </button>
+              <input type="checkbox" id="chk-aggancio-df" class="res-aggancio-chk" title="Mantieni agganciato" />
+            </div>
+            <div class="res-delta-row" id="res-delta-df-wrap">
+              <span class="res-delta-label">Anticipo/Posticipo (mesi)</span>
+              <input type="number" id="res-delta-df" class="res-delta-input" value="0" min="-24" max="24" step="1" title="Negativo = anticipa, Positivo = posticipa" />
+              <span class="res-delta-hint" id="res-delta-df-hint"></span>
+            </div>
+          </div>
+        </div>
+        <div id="res-alloc-warn" class="res-alloc-info-msg" style="margin-bottom:8px;min-height:18px;"></div>
+        <div class="form-group">
+          <label>Note</label>
+          <textarea id="res-alloc-note" rows="2" placeholder="Note opzionali..."></textarea>
+        </div>
+        <div id="res-alloc-error" class="res-modal-error"></div>
+        <button id="btn-res-alloc-save" class="btn btn-primary" style="width:100%;margin-top:12px;">Salva Allocazione</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── RISORSE: COPIA ALLOCAZIONI MODAL ── -->
+  <div id="res-copy-alloc-modal" class="modal hidden">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content modal-sm">
+      <div class="modal-header">
+        <h2>Copia Allocazioni da Scenario</h2>
+        <button class="modal-close" id="res-copy-alloc-modal-close">&times;</button>
+      </div>
+      <div class="modal-body" style="display:flex;flex-direction:column;gap:14px;">
+        <div class="form-group">
+          <label>Copia DA:</label>
+          <select id="res-copy-from-sel"></select>
+        </div>
+        <div class="form-group">
+          <label>Incolla in:</label>
+          <div id="res-copy-to-label" style="padding:8px;background:var(--bg-dark);border-radius:var(--radius-xs);font-weight:500;"></div>
+        </div>
+        <label class="res-checkbox-label">
+          <input type="checkbox" id="chk-copy-overwrite" style="width:auto;" />
+          Sovrascrivi le allocazioni già esistenti nella destinazione
+        </label>
+        <div id="res-copy-alloc-error" class="res-modal-error"></div>
+        <div style="display:flex;gap:8px;">
+          <button id="btn-res-copy-confirm" class="btn btn-primary" style="flex:1;">Copia Allocazioni</button>
+          <button class="btn btn-ghost" style="flex:1;" onclick="document.getElementById('res-copy-alloc-modal').classList.add('hidden')">Annulla</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── RISORSE: IMPORT MODAL ── -->
+  <div id="res-import-modal" class="modal hidden">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content" style="max-width:640px;">
+      <div class="modal-header">
+        <h2 id="res-import-title">Importa da Excel</h2>
+        <button class="modal-close" id="res-import-modal-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p id="res-import-desc" style="font-size:13px;color:var(--text-secondary);margin:0 0 10px;"></p>
+        <button id="btn-res-download-template" class="btn btn-outline btn-sm" style="margin-bottom:14px;">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          Scarica template vuoto
+        </button>
+        <div class="form-group">
+          <label>Seleziona file Excel (.xlsx)</label>
+          <input type="file" id="res-import-file" accept=".xlsx,.xls" style="margin-top:6px;" />
+        </div>
+        <div id="res-import-preview" style="margin-top:12px;"></div>
+        <div id="res-import-result" style="margin-top:8px;font-size:13px;line-height:1.8;"></div>
+        <div style="display:flex;gap:8px;margin-top:16px;">
+          <button id="btn-res-import-confirm" class="btn btn-primary" style="flex:1;" disabled>Importa</button>
+          <button class="btn btn-ghost" style="flex:1;" onclick="document.getElementById('res-import-modal').classList.add('hidden')">Annulla</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── RISORSE: RINOMINA COMMESSA MODAL ── -->
+  <div id="res-rename-commessa-modal" class="modal hidden">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content" style="max-width:500px;">
+      <div class="modal-header">
+        <h2>Rinomina Commessa</h2>
+        <button class="modal-close" id="res-rename-commessa-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="text-muted" style="margin-bottom:16px;font-size:13px;">
+          Aggiorna codice e/o nome della commessa. Tutte le allocazioni e gli input di scenario
+          verranno aggiornati automaticamente.
+        </p>
+        <div class="res-form-section-label">Valori attuali</div>
+        <div class="res-form-grid" style="margin-bottom:16px;">
+          <label>Codice attuale</label>
+          <input type="text" id="res-rename-old-codice" class="res-input" readonly style="background:var(--bg-secondary);color:var(--text-muted);" />
+          <label>Nome attuale</label>
+          <input type="text" id="res-rename-old-nome" class="res-input" readonly style="background:var(--bg-secondary);color:var(--text-muted);" />
+        </div>
+        <div class="res-form-section-label">Nuovi valori</div>
+        <div class="res-form-grid">
+          <label>Nuovo codice *</label>
+          <input type="text" id="res-rename-new-codice" class="res-input" placeholder="es. C25-07" />
+          <label>Nuovo nome *</label>
+          <input type="text" id="res-rename-new-nome" class="res-input" placeholder="es. Studentato Padova" />
+        </div>
+        <p id="res-rename-error" style="color:var(--danger);font-size:13px;margin-top:8px;"></p>
+        <div style="display:flex;gap:8px;margin-top:20px;">
+          <button id="btn-res-rename-confirm" class="btn btn-primary" style="flex:1;">Rinomina</button>
+          <button class="btn btn-ghost" style="flex:1;" id="res-rename-commessa-cancel">Annulla</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- CLOUD AUTH MODAL -->
+  <div id="cloud-auth-modal" class="modal hidden">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content modal-sm" style="max-width:400px;">
+      <div class="modal-header">
+        <h3 id="cloud-modal-title">Cloud Sync</h3>
+        <button class="modal-close" id="cloud-modal-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <!-- Auth tabs -->
+        <div id="cloud-auth-tabs" class="cloud-auth-tabs">
+          <button class="cloud-auth-tab active" data-tab="login">Accedi</button>
+          <button class="cloud-auth-tab" data-tab="register">Registrati</button>
+        </div>
+
+        <!-- Login form -->
+        <form id="cloud-login-form" class="cloud-auth-form">
+          <div class="form-group">
+            <label for="cloud-login-email">Email</label>
+            <input type="email" id="cloud-login-email" required placeholder="nome@esempio.com" autocomplete="email" />
+          </div>
+          <div class="form-group">
+            <label for="cloud-login-password">Password</label>
+            <input type="password" id="cloud-login-password" required placeholder="La tua password" autocomplete="current-password" />
+          </div>
+          <div id="cloud-login-error" class="cloud-auth-error hidden"></div>
+          <button type="submit" class="btn btn-primary" style="width:100%;margin-top:12px;">
+            Accedi
+          </button>
+        </form>
+
+        <!-- Register form -->
+        <form id="cloud-register-form" class="cloud-auth-form hidden">
+          <div class="form-group">
+            <label for="cloud-register-email">Email</label>
+            <input type="email" id="cloud-register-email" required placeholder="nome@esempio.com" autocomplete="email" />
+          </div>
+          <div class="form-group">
+            <label for="cloud-register-password">Password</label>
+            <input type="password" id="cloud-register-password" required minlength="6" placeholder="Minimo 6 caratteri" autocomplete="new-password" />
+          </div>
+          <div class="form-group">
+            <label for="cloud-register-password2">Conferma Password</label>
+            <input type="password" id="cloud-register-password2" required minlength="6" placeholder="Ripeti password" autocomplete="new-password" />
+          </div>
+          <div id="cloud-register-error" class="cloud-auth-error hidden"></div>
+          <button type="submit" class="btn btn-primary" style="width:100%;margin-top:12px;">
+            Registrati
+          </button>
+        </form>
+
+        <!-- Logged-in view -->
+        <div id="cloud-logged-in" class="hidden" style="text-align:center;">
+          <div style="margin-bottom:16px;">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--success, #22c55e)" stroke-width="1.5">
+              <path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/>
+              <polyline points="8 14 12 18 20 10" stroke-width="2"/>
+            </svg>
+          </div>
+          <p style="margin-bottom:4px;font-weight:600;">Connesso al Cloud</p>
+          <p id="cloud-user-email" style="font-size:12px;color:var(--text-muted);margin-bottom:4px;"></p>
+          <p style="margin-bottom:16px;"><span id="cloud-user-role-badge" class="role-badge viewer">viewer</span></p>
+          <div id="cloud-sync-info" style="font-size:12px;color:var(--text-muted);margin-bottom:16px;">
+            <span>Ultimo sync: </span><span id="cloud-last-sync">--</span>
+          </div>
+          <div style="display:flex;gap:8px;">
+            <button id="btn-cloud-force-push" class="btn btn-outline btn-sm" style="flex:1;" title="Invia tutti i dati locali al cloud">
+              Carica nel Cloud
+            </button>
+            <button id="btn-cloud-force-pull" class="btn btn-outline btn-sm" style="flex:1;" title="Scarica tutti i dati dal cloud">
+              Scarica dal Cloud
+            </button>
+          </div>
+          <!-- Admin panel -->
+          <div id="cloud-admin-panel" class="hidden" style="margin-top:16px;border-top:1px solid var(--border);padding-top:12px;">
+            <p style="font-weight:600;font-size:13px;margin-bottom:8px;">Gestione Utenti</p>
+            <div id="cloud-users-list" style="max-height:200px;overflow-y:auto;"></div>
+          </div>
+          <button id="btn-cloud-logout" class="btn btn-ghost btn-sm" style="width:100%;margin-top:12px;color:var(--danger);">
+            Disconnetti
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- CLOUD SYNC CONFLICT MODAL -->
+  <div id="cloud-conflict-modal" class="modal hidden">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content modal-sm" style="max-width:420px;">
+      <div class="modal-header">
+        <h3>Dati trovati su entrambi i lati</h3>
+        <button class="modal-close" id="cloud-conflict-close">&times;</button>
+      </div>
+      <div class="modal-body" style="text-align:center;">
+        <p style="margin-bottom:16px;font-size:13px;">Esistono dati sia in locale che nel cloud. Come vuoi procedere?</p>
+        <div style="display:flex;flex-direction:column;gap:8px;">
+          <button id="btn-conflict-local" class="btn btn-outline" style="width:100%;">
+            Usa dati locali (sovrascrive cloud)
+          </button>
+          <button id="btn-conflict-cloud" class="btn btn-outline" style="width:100%;">
+            Usa dati cloud (sovrascrive locale)
+          </button>
+          <button id="btn-conflict-merge" class="btn btn-primary" style="width:100%;">
+            Unisci (merge automatico)
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
 
   <script type="module" src="/src/main.js"></script>
 </body>

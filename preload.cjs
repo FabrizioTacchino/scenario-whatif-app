@@ -16,11 +16,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getVersion:    ()       => ipcRenderer.invoke('app:getVersion'),
     setZoomFactor: (factor) => webFrame.setZoomFactor(factor),
     getZoomFactor: ()       => webFrame.getZoomFactor(),
+    focusWindow:   ()       => ipcRenderer.invoke('window:focus'),
 });
 
 contextBridge.exposeInMainWorld('updaterAPI', {
     onStart:    (cb) => ipcRenderer.on('updater:start',    (_, version) => cb(version)),
     onProgress: (cb) => ipcRenderer.on('updater:progress', (_, percent) => cb(percent)),
     onReady:    (cb) => ipcRenderer.on('updater:ready',    ()           => cb()),
+    onError:    (cb) => ipcRenderer.on('updater:error',    (_, msg)     => cb(msg)),
     install:    ()   => ipcRenderer.invoke('updater:install'),
 });

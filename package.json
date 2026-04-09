@@ -1,6 +1,6 @@
 {
   "name": "analisi-scenari-vdp",
-  "version": "1.0.5",
+  "version": "1.0.63",
   "type": "module",
   "main": "main.cjs",
   "scripts": {
@@ -14,9 +14,14 @@
     "release": "vite build && electron-builder --publish always"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.101.0",
     "chart.js": "^4.4.0",
     "chartjs-plugin-datalabels": "^2.2.0",
+    "electron-log": "^5.4.3",
     "electron-updater": "^6.8.3",
+    "html2canvas": "^1.4.1",
+    "jspdf": "^4.2.1",
+    "jspdf-autotable": "^5.0.7",
     "vite": "^6.0.0",
     "xlsx": "^0.18.5"
   },
@@ -36,12 +41,19 @@
       {
         "provider": "github",
         "owner": "FabrizioTacchino",
-        "repo": "scenario-whatif-app"
+        "repo": "scenario-whatif-app",
+        "releaseType": "release"
       }
     ],
     "win": {
       "target": "nsis",
       "icon": "logoVDP.png"
+    },
+    "nsis": {
+      "oneClick": true,
+      "allowElevation": true,
+      "deleteAppDataOnUninstall": false,
+      "include": "build/installer.nsh"
     }
   },
   "devDependencies": {

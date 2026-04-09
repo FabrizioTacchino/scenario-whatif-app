@@ -12,6 +12,19 @@ function fmtNum(n) {
 }
 
 /**
+ * Export an array of row-objects to a single-sheet XLSX file
+ * @param {string} filename  — senza estensione
+ * @param {Array}  rows      — array di oggetti { colonna: valore }
+ */
+export function exportChartToExcel(filename, rows) {
+    if (!rows || rows.length === 0) return;
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Dati');
+    XLSX.writeFile(wb, filename + '.xlsx');
+}
+
+/**
  * Export scenario results to XLSX
  */
 export function exportToExcel(monthly, commessaResults, scenarioName) {
@@ -63,6 +76,13 @@ export function exportToTemplate(commessaResults, scenarioName) {
         const prob = comm.effectiveProbabilita != null ? comm.effectiveProbabilita : (comm.probabilitaAOP != null ? comm.probabilitaAOP : 1);
         const marg = comm.effectiveMargine != null ? comm.effectiveMargine : (comm.margineAOP || 0);
 
+        // scenarioMonths actual/remaining are already weighted by probability.
+        // The reimport parser sees "VDP Remaining" → assumes data is at 100% (unweighted)
+        // and the engine re-applies the probability. To avoid double-weighting,
+        // we must export the unweighted values (divide by prob for Order Intake).
+        const isOI = (comm.effectiveType || comm.type) === 'Order Intake';
+        const unweightDiv = (isOI && prob > 0) ? prob : 1;
+
         for (const m of months) {
             const [y, mo] = m.month.split('-').map(Number);
             const dt = new Date(y, mo - 1, 1);
@@ -70,12 +90,12 @@ export function exportToTemplate(commessaResults, scenarioName) {
             rows.push({
                 'Settore': comm.settore || '',
                 'Probabilità': prob,
-                'Type': comm.type || '',
+                'Type': comm.effectiveType || comm.type || '',
                 'Codice Commessa': comm.codice || '',
                 'Nome Commessa': comm.nome || '',
                 'Data': dt,
-                'VDP Actual': Math.round(m.actual || 0),
-                'VDP Remaining': Math.round(m.remaining || 0),
+                'VDP Actual': (m.actual || 0) / unweightDiv,
+                'VDP Remaining': (m.remaining || 0) / unweightDiv,
                 'Margine a vita Intera': marg,
             });
         }

@@ -7,10 +7,17 @@ import { parseExcel, parseImportedScenario, dateToMonth } from './dataLoader.js'
 import { computeScenario, computeMultiScenario } from './scenarioEngine.js';
 import {
     listScenarios, getScenario, createScenario, duplicateScenario,
-    updateScenarioInput, deleteScenario,
-    saveBaseline, loadBaseline, clearBaseline,
+    updateScenario, updateScenarioInput, deleteScenario,
+    saveBaseline, loadBaseline, clearBaseline, renameCommessaKey,
+    lockScenario, unlockScenario, setScenarioDraft,
 } from './scenarioManager.js';
-import { exportToExcel, exportToCSV, exportToTemplate } from './exportManager.js';
+import { exportToExcel, exportToCSV, exportToTemplate, exportChartToExcel } from './exportManager.js';
+import { initResourceModule, renderResourceTab, onScenarioDuplicated } from './resourceUI.js';
+import { renameCommessaCodice, listPersone, listAllocazioni } from './resourceManager.js';
+import { computeResourceMatrix, computeResourceKpis } from './resourceEngine.js';
+import { generateReport } from './reportGenerator.js';
+import { supabase, signIn, signUp, signOut, getSession, onAuthStateChange, getUserRole, listUsers, updateUserRole } from './supabaseClient.js';
+import { initSync, stopSync, fullPush, fullPull, getSyncStatus, onSyncStatusChange, incrementalSync, trackDeletion, getCurrentRole, canWrite, fetchAllScenariosFromCloud, pushScenarioApproval, pushScenarioDelete, pushSingleScenario, pushScenarioRestore } from './syncManager.js';
 import { Chart, registerables } from 'chart.js';
 import ChartDataLabels from 'chartjs-plugin-datalabels';
 
@@ -22,10 +29,35 @@ let activeScenarioId = null;
 let comparedScenarioIds = null; // List of scenario IDs being compared
 let lastResult = null;     // last computed scenario result
 let charts = {};           // Chart.js instances
+let _currentUserRole = null; // 'admin' | 'editor' | 'hr' | 'commercial' | 'tester' | 'viewer'
+let _currentUserEmail = null;
 
 // ─── DOM refs ───
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => document.querySelectorAll(sel);
+
+// ─── Electron focus fix: override native dialogs ───
+// Native confirm/alert steal focus from Electron webContents.
+// Persistent hidden input — avoids DOM add/remove flash on every call.
+const _focusAnchor = document.createElement('input');
+_focusAnchor.style.cssText = 'position:fixed;top:-100px;left:-100px;opacity:0;width:1px;height:1px;pointer-events:none;';
+_focusAnchor.tabIndex = -1;
+_focusAnchor.setAttribute('aria-hidden', 'true');
+document.body.appendChild(_focusAnchor);
+
+function _restoreFocus() {
+    const fix = () => {
+        if (window.electronAPI?.focusWindow) window.electronAPI.focusWindow();
+        _focusAnchor.focus();
+        requestAnimationFrame(() => _focusAnchor.blur());
+    };
+    setTimeout(fix, 100);
+    setTimeout(fix, 300);
+}
+const _nativeConfirm = window.confirm.bind(window);
+const _nativeAlert = window.alert.bind(window);
+window.confirm = (msg) => { const r = _nativeConfirm(msg); _restoreFocus(); return r; };
+window.alert = (msg) => { _nativeAlert(msg); _restoreFocus(); };
 
 // ─── Init ───
 document.addEventListener('DOMContentLoaded', async () => {
@@ -43,6 +75,78 @@ document.addEventListener('DOMContentLoaded', async () => {
     setupChangeFileButton();
     setupLicenseScreen();
     setupUpdateBanner();
+    setupChartDownloads();
+    setupScenarioCompareTab();
+    setupCloudAuth();
+
+    // Inizializza modulo risorse (non invasivo)
+    initResourceModule({
+        getCommesse: () => {
+            const base = appData?.commesse || [];
+            const scen = activeScenarioId ? getScenario(activeScenarioId) : null;
+            const inputs = scen?.inputs || {};
+            const newCommesse = scen?.newCommesse || [];
+            const all = newCommesse.length ? [...base, ...newCommesse] : base;
+            return all.map(c => {
+                const ci = inputs[c.key] || {};
+                const probEffettiva = ci.probabilita != null
+                    ? ci.probabilita
+                    : Math.round((c.probabilitaAOP || 0) * 100);
+                return { ...c, probabilita: probEffettiva };
+            });
+        },
+        getActiveScenarioId: () => activeScenarioId,
+        getScenarios: () => listScenarios(),
+        getEffectiveCommessaDates: (codice, scenarioId) => {
+            if (!appData) return null;
+            const all = appData.commesse || [];
+            const comm = all.find(c => c.codice === codice);
+            if (!comm) return null;
+            const resolvedId = scenarioId !== undefined ? scenarioId : activeScenarioId;
+
+            // computeScenario senza filtri data: vede tutti i mesi inclusi quelli
+            // estesi da ritardo/smussamento. Il vdpAOP dei mesi con solo vdpRemaining
+            // negativo viene già calcolato dal dataLoader come (remaining * prob) ≠ 0.
+            const scen = resolvedId ? getScenario(resolvedId) : null;
+            const result = computeScenario([comm], appData.monthlyData, scen || {}, {});
+            const cr = result?.commessaResults?.[0];
+            // !== 0: include valori negativi (es. rettifiche), esclude solo gli zeri
+            const withVdp = (cr?.scenarioMonths || [])
+                .filter(m => (m.vdp || 0) !== 0)
+                .map(m => m.month)
+                .sort();
+
+            if (!withVdp.length) return null;
+            return {
+                dataInizio: withVdp[0],
+                dataFine:   withVdp[withVdp.length - 1],
+            };
+        },
+        getSelectedCommesse: () => {
+            const activeKeys = Array.from(document.querySelectorAll('#filter-commessa .filter-chip.active'))
+                .map(b => b.dataset.value).filter(Boolean);
+            if (!activeKeys.length) return [];
+            const base = appData?.commesse || [];
+            return activeKeys.map(key => base.find(x => x.key === key)?.codice).filter(Boolean);
+        },
+        getActiveScenarioName: () => {
+            if (!activeScenarioId) return 'Baseline';
+            const scen = getScenario(activeScenarioId);
+            return scen ? scen.name : 'Scenario attivo';
+        },
+        getDateRange: () => ({
+            from: document.getElementById('filter-date-from')?.value || null,
+            to:   document.getElementById('filter-date-to')?.value   || null,
+        }),
+        getActiveFilters: () => getActiveFilters(),
+        renameCommessa: (oldCodice, oldNome, newCodice, newNome) => {
+            const allocCount = renameCommessaCodice(oldCodice, newCodice);
+            const oldKey = `${oldCodice}|||${oldNome}`;
+            const newKey = `${newCodice}|||${newNome}`;
+            const scenCount = renameCommessaKey(oldKey, newKey);
+            return { allocCount, scenCount };
+        },
+    });
 
     await checkAndInitLicense();
 });
@@ -116,6 +220,493 @@ function afterLicenseValid(licenseResult) {
     } else {
         $('#upload-overlay').classList.remove('hidden');
     }
+
+    // Cloud sync (non-blocking)
+    initCloudSync();
+}
+
+// ============================================================
+//  CLOUD SYNC
+// ============================================================
+
+async function initCloudSync() {
+    try {
+        const session = await getSession();
+        if (session) {
+            updateCloudIndicator('syncing');
+            _currentUserRole = await getUserRole();
+            _currentUserEmail = session.user.email || null;
+            const result = await initSync();
+            updateCloudIndicator('connected');
+            const emailEl = $('#cloud-user-email');
+            if (emailEl) emailEl.textContent = session.user.email;
+            _applyRoleRestrictions(_currentUserRole);
+
+            // If data was pulled, reload the app
+            if (result === 'pulled') {
+                const saved = loadBaseline();
+                if (saved) {
+                    appData = saved;
+                    $('#upload-overlay').classList.add('hidden');
+                    $('#app').classList.remove('hidden');
+                    initApp();
+                }
+            }
+        } else {
+            updateCloudIndicator('disconnected');
+        }
+    } catch (err) {
+        console.error('[CloudSync] init error:', err);
+        updateCloudIndicator('error');
+    }
+
+    // Listen for status changes
+    onSyncStatusChange((status) => {
+        updateCloudIndicator(status.state);
+        const lastSyncEl = $('#cloud-last-sync');
+        if (lastSyncEl && status.lastSync) {
+            lastSyncEl.textContent = new Date(status.lastSync).toLocaleTimeString('it-IT');
+        }
+        // Show a non-intrusive notification when remote data has changed
+        if (status.dataChanged) {
+            // Auto-refresh resource tab if it's currently active
+            if (document.querySelector('.tab-btn.active')?.dataset.tab === 'risorse') {
+                renderResourceTab();
+            }
+            _showSyncUpdateBanner();
+        }
+    });
+}
+
+function _showSyncUpdateBanner() {
+    // Don't show if already visible
+    if ($('#sync-update-banner')) return;
+
+    const banner = document.createElement('div');
+    banner.id = 'sync-update-banner';
+    banner.style.cssText = 'position:fixed;bottom:16px;right:16px;background:var(--bg-card,#fff);border:1px solid var(--primary,#638cff);border-radius:8px;padding:10px 16px;font-size:12px;z-index:1200;box-shadow:0 4px 12px rgba(0,0,0,.15);display:flex;align-items:center;gap:10px;';
+    banner.innerHTML = `
+        <span style="color:var(--text);">Nuovi dati disponibili dal cloud</span>
+        <button id="btn-sync-apply" style="background:var(--primary,#638cff);color:#fff;border:none;border-radius:4px;padding:4px 12px;font-size:11px;cursor:pointer;font-weight:600;">Aggiorna</button>
+        <button id="btn-sync-dismiss" style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:14px;padding:0 4px;">&times;</button>
+    `;
+    document.body.appendChild(banner);
+
+    $('#btn-sync-apply').addEventListener('click', () => {
+        const saved = loadBaseline();
+        if (saved && appData) {
+            appData = saved;
+            refreshDashboard();
+            renderAssumptionsTable();
+            if (document.querySelector('.tab-btn.active')?.dataset.tab === 'risorse') {
+                renderResourceTab();
+            }
+        }
+        // Reload scenario list to reflect lock/unlock/new scenarios from cloud
+        loadScenarioList();
+        if (activeScenarioId) {
+            $('#active-scenario-select').value = activeScenarioId;
+        }
+        banner.remove();
+        _restoreFocus();
+    });
+
+    $('#btn-sync-dismiss').addEventListener('click', () => banner.remove());
+
+    // Auto-dismiss after 30 seconds
+    setTimeout(() => banner.remove(), 30000);
+}
+
+function updateCloudIndicator(state) {
+    const states = ['disconnected', 'connected', 'syncing', 'error'];
+    states.forEach(s => {
+        const icon = $(`#cloud-icon-${s}`);
+        if (icon) icon.classList.toggle('hidden', s !== state);
+    });
+
+    const label = $('#cloud-sync-label');
+    if (label) {
+        const labels = { disconnected: 'Cloud', connected: 'Sync OK', syncing: 'Sync...', error: 'Errore', offline: 'Offline' };
+        label.textContent = labels[state] || 'Cloud';
+    }
+
+    const btn = $('#btn-cloud-sync');
+    if (btn) {
+        btn.title = {
+            disconnected: 'Cloud Sync — Clicca per accedere',
+            connected: 'Cloud Sync — Connesso',
+            syncing: 'Cloud Sync — Sincronizzazione in corso...',
+            error: 'Cloud Sync — Errore di sincronizzazione',
+            offline: 'Cloud Sync — Offline'
+        }[state] || 'Cloud Sync';
+    }
+}
+
+function setupCloudAuth() {
+    const modal = $('#cloud-auth-modal');
+    const conflictModal = $('#cloud-conflict-modal');
+    if (!modal) return;
+
+    // Open modal — shared handler for both buttons
+    async function _openCloudModal() {
+        const session = await getSession();
+        if (session) {
+            // Show logged-in view
+            $('#cloud-auth-tabs').classList.add('hidden');
+            $('#cloud-login-form').classList.add('hidden');
+            $('#cloud-register-form').classList.add('hidden');
+            $('#cloud-logged-in').classList.remove('hidden');
+            $('#cloud-user-email').textContent = session.user.email;
+            // Role badge
+            const roleBadge = $('#cloud-user-role-badge');
+            if (roleBadge) {
+                roleBadge.textContent = _currentUserRole || 'viewer';
+                roleBadge.className = 'role-badge ' + (_currentUserRole || 'viewer');
+            }
+            // Admin panel
+            if (_currentUserRole === 'admin') {
+                $('#cloud-admin-panel')?.classList.remove('hidden');
+                _loadAdminUserList();
+            } else {
+                $('#cloud-admin-panel')?.classList.add('hidden');
+            }
+            const status = getSyncStatus();
+            const lastSyncEl = $('#cloud-last-sync');
+            if (lastSyncEl && status.lastSync) {
+                lastSyncEl.textContent = new Date(status.lastSync).toLocaleString('it-IT');
+            }
+        } else {
+            // Show login form
+            $('#cloud-auth-tabs').classList.remove('hidden');
+            $('#cloud-login-form').classList.remove('hidden');
+            $('#cloud-register-form').classList.add('hidden');
+            $('#cloud-logged-in').classList.add('hidden');
+            // Reset active tab
+            document.querySelectorAll('.cloud-auth-tab').forEach(t => t.classList.remove('active'));
+            document.querySelector('.cloud-auth-tab[data-tab="login"]')?.classList.add('active');
+        }
+        modal.classList.remove('hidden');
+    }
+
+    $('#btn-cloud-sync')?.addEventListener('click', _openCloudModal);
+    $('#btn-cloud-from-upload')?.addEventListener('click', _openCloudModal);
+
+    // Close modal
+    $('#cloud-modal-close')?.addEventListener('click', () => modal.classList.add('hidden'));
+    modal.querySelector('.modal-backdrop')?.addEventListener('click', () => modal.classList.add('hidden'));
+
+    // Tab switching
+    document.querySelectorAll('.cloud-auth-tab').forEach(tab => {
+        tab.addEventListener('click', () => {
+            document.querySelectorAll('.cloud-auth-tab').forEach(t => t.classList.remove('active'));
+            tab.classList.add('active');
+            const isLogin = tab.dataset.tab === 'login';
+            $('#cloud-login-form').classList.toggle('hidden', !isLogin);
+            $('#cloud-register-form').classList.toggle('hidden', isLogin);
+            // Clear errors
+            $('#cloud-login-error').classList.add('hidden');
+            $('#cloud-register-error').classList.add('hidden');
+        });
+    });
+
+    // Login form
+    $('#cloud-login-form')?.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const email = $('#cloud-login-email').value.trim();
+        const password = $('#cloud-login-password').value;
+        const errEl = $('#cloud-login-error');
+        errEl.classList.add('hidden');
+
+        try {
+            await signIn(email, password);
+            modal.classList.add('hidden');
+            updateCloudIndicator('syncing');
+
+            _currentUserRole = await getUserRole();
+            _currentUserEmail = email;
+            const result = await initSync();
+            updateCloudIndicator('connected');
+            $('#cloud-user-email').textContent = email;
+            _applyRoleRestrictions(_currentUserRole);
+
+            if (result === 'pulled') {
+                const saved = loadBaseline();
+                if (saved) {
+                    appData = saved;
+                    $('#upload-overlay').classList.add('hidden');
+                    $('#app').classList.remove('hidden');
+                    initApp();
+                }
+            }
+        } catch (err) {
+            errEl.textContent = _translateAuthError(err.message);
+            errEl.classList.remove('hidden');
+        }
+    });
+
+    // Register form
+    $('#cloud-register-form')?.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const email = $('#cloud-register-email').value.trim();
+        const pw = $('#cloud-register-password').value;
+        const pw2 = $('#cloud-register-password2').value;
+        const errEl = $('#cloud-register-error');
+        errEl.classList.add('hidden');
+
+        if (pw !== pw2) {
+            errEl.textContent = 'Le password non coincidono.';
+            errEl.classList.remove('hidden');
+            return;
+        }
+
+        try {
+            const data = await signUp(email, pw);
+            if (data.user && !data.session) {
+                // Email confirmation required — try auto-login immediately
+                try {
+                    await signIn(email, pw);
+                    _currentUserRole = await getUserRole();
+                    _currentUserEmail = email;
+                    _applyRoleRestrictions(_currentUserRole);
+                    modal.classList.add('hidden');
+                    updateCloudIndicator('syncing');
+                    const result = await initSync();
+                    updateCloudIndicator('connected');
+                    // If data was pulled, load the app
+                    if (result === 'pulled') {
+                        const saved = loadBaseline();
+                        if (saved) {
+                            appData = saved;
+                            $('#upload-overlay').classList.add('hidden');
+                            $('#app').classList.remove('hidden');
+                            initApp();
+                        }
+                    }
+                } catch {
+                    // Auto-login failed (email confirmation enforced)
+                    errEl.textContent = 'Registrazione completata! Controlla la tua email per confermare, poi accedi.';
+                    errEl.style.background = 'rgba(34,197,94,.1)';
+                    errEl.style.color = 'var(--success, #22c55e)';
+                    errEl.classList.remove('hidden');
+                }
+            } else if (data.session) {
+                // Auto-confirmed, proceed to sync
+                _currentUserRole = await getUserRole();
+                _currentUserEmail = email;
+                _applyRoleRestrictions(_currentUserRole);
+                modal.classList.add('hidden');
+                updateCloudIndicator('syncing');
+                const result = await initSync();
+                updateCloudIndicator('connected');
+                if (result === 'pulled') {
+                    const saved = loadBaseline();
+                    if (saved) {
+                        appData = saved;
+                        $('#upload-overlay').classList.add('hidden');
+                        $('#app').classList.remove('hidden');
+                        initApp();
+                    }
+                }
+            }
+        } catch (err) {
+            errEl.textContent = _translateAuthError(err.message);
+            errEl.classList.remove('hidden');
+        }
+    });
+
+    // Logout
+    $('#btn-cloud-logout')?.addEventListener('click', async () => {
+        try {
+            stopSync();
+            await signOut();
+            _currentUserRole = null;
+            _currentUserEmail = null;
+            updateCloudIndicator('disconnected');
+            $('#viewer-banner')?.classList.add('hidden');
+            modal.classList.add('hidden');
+        } catch (err) {
+            console.error('[CloudAuth] logout error:', err);
+        }
+    });
+
+    // Force push/pull — NO native confirm() to avoid Electron focus loss
+    $('#btn-cloud-force-push')?.addEventListener('click', async () => {
+        try {
+            modal.classList.add('hidden');
+            updateCloudIndicator('syncing');
+            await fullPush();
+            updateCloudIndicator('connected');
+            const lastSyncEl = $('#cloud-last-sync');
+            if (lastSyncEl) lastSyncEl.textContent = new Date().toLocaleString('it-IT');
+            _restoreFocus();
+        } catch (err) {
+            console.error('[CloudSync] force push error:', err);
+            updateCloudIndicator('error');
+            _restoreFocus();
+        }
+    });
+
+    $('#btn-cloud-force-pull')?.addEventListener('click', async () => {
+        try {
+            modal.classList.add('hidden');
+            updateCloudIndicator('syncing');
+            await fullPull();
+            updateCloudIndicator('connected');
+            const lastSyncEl = $('#cloud-last-sync');
+            if (lastSyncEl) lastSyncEl.textContent = new Date().toLocaleString('it-IT');
+            const saved = loadBaseline();
+            if (saved) {
+                appData = saved;
+                initApp();
+            }
+            _restoreFocus();
+        } catch (err) {
+            console.error('[CloudSync] force pull error:', err);
+            updateCloudIndicator('error');
+            _restoreFocus();
+        }
+    });
+
+    // Conflict modal handlers
+    $('#cloud-conflict-close')?.addEventListener('click', () => conflictModal?.classList.add('hidden'));
+    conflictModal?.querySelector('.modal-backdrop')?.addEventListener('click', () => conflictModal?.classList.add('hidden'));
+    $('#btn-conflict-local')?.addEventListener('click', async () => {
+        conflictModal?.classList.add('hidden');
+        updateCloudIndicator('syncing');
+        await fullPush();
+        updateCloudIndicator('connected');
+    });
+    $('#btn-conflict-cloud')?.addEventListener('click', async () => {
+        conflictModal?.classList.add('hidden');
+        updateCloudIndicator('syncing');
+        await fullPull();
+        updateCloudIndicator('connected');
+        const saved = loadBaseline();
+        if (saved) { appData = saved; initApp(); }
+        setTimeout(() => document.body.focus(), 100);
+    });
+    $('#btn-conflict-merge')?.addEventListener('click', async () => {
+        conflictModal?.classList.add('hidden');
+        updateCloudIndicator('syncing');
+        await incrementalSync();
+        updateCloudIndicator('connected');
+    });
+}
+
+function _applyRoleRestrictions(role) {
+    const viewerBanner = $('#viewer-banner');
+    const testerBanner = $('#tester-banner');
+    const pushBtn = $('#btn-cloud-force-push');
+
+    // Viewer: read-only banner, push disabled
+    if (role === 'viewer') {
+        viewerBanner?.classList.remove('hidden');
+        testerBanner?.classList.add('hidden');
+        if (pushBtn) { pushBtn.disabled = true; pushBtn.title = 'Sola lettura'; }
+    } else if (role === 'tester') {
+        // Tester: sandbox banner, push disabled (download only)
+        viewerBanner?.classList.add('hidden');
+        testerBanner?.classList.remove('hidden');
+        if (pushBtn) { pushBtn.disabled = true; pushBtn.title = 'Modalità test — upload disabilitato'; }
+    } else {
+        viewerBanner?.classList.add('hidden');
+        testerBanner?.classList.add('hidden');
+        if (pushBtn) { pushBtn.disabled = false; pushBtn.title = 'Invia tutti i dati locali al cloud'; }
+    }
+
+    // Scenario buttons: disabled for viewer and hr (tester CAN edit locally)
+    const scenarioWriteDisabled = (role === 'viewer' || role === 'hr');
+    const scenarioBtns = [
+        '#btn-new-scenario', '#btn-import-scenario', '#btn-duplicate-scenario',
+        '#btn-rename-scenario', '#btn-delete-scenario'
+    ];
+    scenarioBtns.forEach(sel => {
+        const btn = $(sel);
+        if (btn) {
+            btn.disabled = scenarioWriteDisabled;
+            if (scenarioWriteDisabled) btn.title = 'Non hai i permessi per modificare gli scenari';
+        }
+    });
+
+    // Resource/Persone buttons: disabled for viewer and commercial (tester CAN edit locally)
+    const personeWriteDisabled = (role === 'viewer' || role === 'commercial');
+    const personeBtns = ['#btn-res-add-persona', '#btn-res-pm-save'];
+    personeBtns.forEach(sel => {
+        const btn = $(sel);
+        if (btn) {
+            btn.disabled = personeWriteDisabled;
+            if (personeWriteDisabled) btn.title = 'Non hai i permessi per modificare le risorse';
+        }
+    });
+
+    // Allocazioni buttons: disabled for viewer and hr (tester CAN edit locally)
+    const allocWriteDisabled = (role === 'viewer' || role === 'hr');
+    const allocBtns = ['#btn-res-add-alloc', '#btn-res-alloc-save', '#btn-res-copy-confirm'];
+    allocBtns.forEach(sel => {
+        const btn = $(sel);
+        if (btn) {
+            btn.disabled = allocWriteDisabled;
+            if (allocWriteDisabled) btn.title = 'Non hai i permessi per modificare le allocazioni';
+        }
+    });
+
+    // Gestione Scenari tab: visible only for admin
+    const gestioneTab = $('#tab-btn-gestione-scenari');
+    if (gestioneTab) {
+        if (role === 'admin') {
+            gestioneTab.classList.remove('hidden');
+        } else {
+            gestioneTab.classList.add('hidden');
+        }
+    }
+
+    // Tester: update push button and banner for draft mode
+    if (role === 'tester') {
+        if (pushBtn) { pushBtn.disabled = false; pushBtn.title = 'Invia scenari come bozze al cloud'; }
+    }
+}
+
+async function _loadAdminUserList() {
+    const container = $('#cloud-users-list');
+    if (!container) return;
+    try {
+        const users = await listUsers();
+        container.innerHTML = users.map(u => `
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border);font-size:12px;">
+                <span style="flex:1;overflow:hidden;text-overflow:ellipsis;">${u.email || u.user_id.substring(0, 12) + '...'}</span>
+                <select data-uid="${u.user_id}" class="role-select" style="font-size:11px;padding:2px 4px;border-radius:4px;border:1px solid var(--border);background:var(--bg-2);color:var(--text);">
+                    <option value="admin" ${u.role === 'admin' ? 'selected' : ''}>Admin</option>
+                    <option value="editor" ${u.role === 'editor' ? 'selected' : ''}>Editor</option>
+                    <option value="hr" ${u.role === 'hr' ? 'selected' : ''}>HR</option>
+                    <option value="commercial" ${u.role === 'commercial' ? 'selected' : ''}>Commercial</option>
+                    <option value="tester" ${u.role === 'tester' ? 'selected' : ''}>Tester</option>
+                    <option value="viewer" ${u.role === 'viewer' ? 'selected' : ''}>Viewer</option>
+                </select>
+            </div>
+        `).join('');
+
+        container.querySelectorAll('.role-select').forEach(sel => {
+            sel.addEventListener('change', async (e) => {
+                try {
+                    await updateUserRole(e.target.dataset.uid, e.target.value);
+                } catch (err) {
+                    alert('Errore nel cambio ruolo: ' + err.message);
+                    _loadAdminUserList(); // Reload to reset
+                }
+            });
+        });
+    } catch (err) {
+        container.innerHTML = '<p style="font-size:11px;color:var(--danger);">Errore caricamento utenti</p>';
+    }
+}
+
+function _translateAuthError(msg) {
+    if (msg.includes('Invalid login')) return 'Email o password non validi.';
+    if (msg.includes('already registered')) return 'Questa email e\' gia\' registrata.';
+    if (msg.includes('Password should be')) return 'La password deve avere almeno 6 caratteri.';
+    if (msg.includes('rate limit')) return 'Troppi tentativi. Riprova tra qualche minuto.';
+    if (msg.includes('network')) return 'Errore di rete. Verifica la connessione.';
+    return msg;
 }
 
 // ============================================================
@@ -200,15 +791,16 @@ function setupUpdateImport() {
 
     input.addEventListener('change', async (e) => {
         const file = e.target.files[0];
+        input.value = ''; // Reset so the same file can be re-imported
         if (!file || !appData) return;
 
         try {
             const buf = await file.arrayBuffer();
-            const { monthlyData: importedData, typeFromFile, inputOverrides } = parseImportedScenario(buf);
+            const { monthlyData: importedData, typeFromFile, settoreFromFile, inputOverrides, fileIsUnweighted } = parseImportedScenario(buf);
 
             // Create a new scenario of type 'imported'
             const name = file.name.replace(/\.[^/.]+$/, "") || 'Scenario Importato';
-            const scen = createScenario(name, 'Importato da Excel', 'imported', importedData);
+            const scen = createScenario(name, 'Importato da Excel', 'imported', importedData, _currentUserEmail);
 
             // Auto-apply type overrides from the imported file
             if (typeFromFile) {
@@ -230,6 +822,11 @@ function setupUpdateImport() {
                         if (baseProb == null || overrides.probabilita !== baseProb) {
                             toApply.probabilita = overrides.probabilita;
                         }
+                        // probabilitaFile = riferimento per il calcolo di probScale in computeScenario.
+                        // Nuovo formato (VDP Remaining = 100% non pesato): il file è già al lordo,
+                        // quindi fileProb = 1.0 → probabilitaFile = 100.
+                        // Vecchio formato (SIL Remaining = già pesato): probabilitaFile = prob del file.
+                        toApply.probabilitaFile = fileIsUnweighted ? 100 : overrides.probabilita;
                     }
                     if (overrides.margine != null) {
                         const baseMarg = baseComm ? parseFloat(((baseComm.margineAOP || 0) * 100).toFixed(2)) : null;
@@ -243,11 +840,33 @@ function setupUpdateImport() {
                 }
             }
 
+            // Identifica commesse presenti nel file scenario ma non nell'AOP baseline
+            const newCommesse = [];
+            for (const key of Object.keys(importedData)) {
+                if (!appData.commesse.find(c => c.key === key)) {
+                    const [codice, nome] = key.split('|||');
+                    newCommesse.push({
+                        key,
+                        codice: codice || '',
+                        nome: nome || '',
+                        settore: (settoreFromFile && settoreFromFile[key]) || '',
+                        type: (typeFromFile && typeFromFile[key]) || 'Order Intake',
+                        probabilitaAOP: 0,
+                        margineAOP: 0,
+                        vdpTotale: 0,
+                    });
+                }
+            }
+            if (newCommesse.length > 0) {
+                updateScenario(scen.id, { newCommesse });
+            }
+
             activeScenarioId = scen.id;
+            comparedScenarioIds = null;
             loadScenarioList();
             $('#active-scenario-select').value = scen.id;
 
-            renderDashboard();
+            refreshDashboard();
             renderAssumptionsTable();
             alert('Scenario importato con successo!');
         } catch (err) {
@@ -286,6 +905,7 @@ function initApp() {
     loadScenarioList();
     renderDashboard();
     renderAssumptionsTable();
+    _restoreFocus();
 }
 
 // ============================================================
@@ -294,7 +914,7 @@ function initApp() {
 function populateFilters() {
     const { filters, allMonths, commesse } = appData;
 
-    // Settore chips
+    // Settore chips (ricreati ad ogni initApp — nessun listener diretto, usa delegation)
     const settoreContainer = $('#filter-settore');
     settoreContainer.innerHTML = '';
     for (const s of filters.settori) {
@@ -302,24 +922,13 @@ function populateFilters() {
         btn.className = 'filter-chip';
         btn.dataset.value = s;
         btn.textContent = s;
-        btn.addEventListener('click', () => {
-            btn.classList.toggle('active');
-            filterSidebarCommesse();
-            refreshDashboard();
-        });
         settoreContainer.appendChild(btn);
     }
 
-    // Type chips — already in HTML, just attach toggle events
-    for (const chip of $$('#filter-type .filter-chip')) {
-        chip.addEventListener('click', () => {
-            chip.classList.toggle('active');
-            filterSidebarCommesse();
-            refreshDashboard();
-        });
-    }
+    // Type chips — statici in HTML, nessun listener diretto (usa delegation)
+    // Non serve fare nulla: il click è gestito da setupFilterEvents una volta sola.
 
-    // Commessa chips - rendered in Sidebar
+    // Commessa chips (ricreati ad ogni initApp — nessun listener diretto, usa delegation)
     const commContainer = $('#filter-commessa');
     commContainer.innerHTML = '';
     for (const c of commesse) {
@@ -330,10 +939,6 @@ function populateFilters() {
         btn.dataset.type = c.type;
         btn.dataset.search = `${c.codice} ${c.nome}`.toLowerCase();
         btn.textContent = `${c.codice} — ${c.nome}`;
-        btn.addEventListener('click', () => {
-            btn.classList.toggle('active');
-            refreshDashboard();
-        });
         commContainer.appendChild(btn);
     }
 
@@ -358,10 +963,74 @@ function getActiveFilters() {
 }
 
 function setupFilterEvents() {
-    // Date inputs still use change event
+    // ── Event delegation sui container dei filtri ──────────────────────────
+    // Un singolo listener per container, impostato UNA VOLTA sola.
+    // Funziona sia per chip statici HTML sia per chip aggiunti dinamicamente.
+    // Previene l'accumulo di listener duplicati che si cancellano a vicenda.
+    $('#filter-settore')?.addEventListener('click', (e) => {
+        const chip = e.target.closest('.filter-chip');
+        if (!chip) return;
+        chip.classList.toggle('active');
+        filterSidebarCommesse();
+        refreshDashboard();
+        if (document.querySelector('.tab-btn.active')?.dataset.tab === 'risorse') renderResourceTab();
+    });
+
+    $('#filter-type')?.addEventListener('click', (e) => {
+        const chip = e.target.closest('.filter-chip');
+        if (!chip) return;
+        chip.classList.toggle('active');
+        filterSidebarCommesse();
+        refreshDashboard();
+        if (document.querySelector('.tab-btn.active')?.dataset.tab === 'risorse') renderResourceTab();
+    });
+
+    $('#filter-commessa')?.addEventListener('click', (e) => {
+        const chip = e.target.closest('.filter-chip');
+        if (!chip) return;
+        chip.classList.toggle('active');
+        refreshDashboard();
+        // Se il tab risorse è attivo, aggiorna anche quello
+        if (document.querySelector('.tab-btn.active')?.dataset.tab === 'risorse') {
+            renderResourceTab();
+        }
+    });
+
+    // Date inputs
     for (const sel of ['#filter-date-from', '#filter-date-to']) {
-        $(sel)?.addEventListener('change', () => refreshDashboard());
+        $(sel)?.addEventListener('change', () => {
+            // Deseleziona eventuali shortcut anno attivi quando la data viene cambiata manualmente
+            $$('.btn-year-shortcut.active').forEach(b => b.classList.remove('active'));
+            refreshDashboard();
+            if (document.querySelector('.tab-btn.active')?.dataset.tab === 'risorse') renderResourceTab();
+        });
     }
+
+    // Shortcut annualità
+    $$('.btn-year-shortcut').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const year = btn.dataset.year;
+            const isRisorse = document.querySelector('.tab-btn.active')?.dataset.tab === 'risorse';
+            const isActive = btn.classList.contains('active');
+
+            // Toggle: se già attivo lo deseleziono e ripristino range completo
+            if (isActive) {
+                btn.classList.remove('active');
+                if (appData?.allMonths?.length) {
+                    $('#filter-date-from').value = appData.allMonths[0];
+                    $('#filter-date-to').value = appData.allMonths[appData.allMonths.length - 1];
+                }
+            } else {
+                // Deseleziona gli altri shortcut e attiva questo
+                $$('.btn-year-shortcut.active').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                $('#filter-date-from').value = `${year}-01`;
+                $('#filter-date-to').value = `${year}-12`;
+            }
+            refreshDashboard();
+            if (isRisorse) renderResourceTab();
+        });
+    });
 
     // Commessa Search
     $('#commessa-search')?.addEventListener('input', () => {
@@ -371,6 +1040,8 @@ function setupFilterEvents() {
     $('#btn-reset-filters')?.addEventListener('click', () => {
         // Remove active class from all chips
         $$('.filter-chip.active').forEach(c => c.classList.remove('active'));
+        // Deseleziona shortcut anno
+        $$('.btn-year-shortcut.active').forEach(b => b.classList.remove('active'));
 
         // Clear search
         const searchInput = $('#commessa-search');
@@ -384,6 +1055,8 @@ function setupFilterEvents() {
             $('#filter-date-to').value = appData.allMonths[appData.allMonths.length - 1];
         }
         refreshDashboard();
+        const isRisorse = $('#tab-risorse')?.classList.contains('active');
+        if (isRisorse) renderResourceTab();
     });
 }
 
@@ -432,14 +1105,17 @@ function setupTabs() {
 
             // Re-render charts for the newly activated tab
             const tab = btn.dataset.tab;
-            if (!lastResult || tab === 'assumptions') return;
+            if (tab === 'assumptions') return;
+            if (tab === 'risorse') { renderResourceTab(); return; }
+            if (tab === 'scenario-compare') { renderScenarioCompareTable(); return; }
+            if (tab === 'gestione-scenari') { renderGestioneScenari(); return; }
+            if (!lastResult) return;
             Object.values(charts).forEach(c => c.destroy());
             charts = {};
-            if (tab === 'dashboard') renderCharts(lastResult.monthly, lastResult.commessaResults);
+            if (tab === 'dashboard')          renderCharts(lastResult.monthly, lastResult.commessaResults);
             else if (tab === 'details')       renderDetailsCharts(lastResult.monthly, lastResult.commessaResults);
+            else if (tab === 'details-type')  renderDetailsTypeCharts(lastResult.monthly, lastResult.commessaResults);
             else if (tab === 'analisi')       renderAnalisiCharts(lastResult.monthly, lastResult.commessaResults);
-            else if (tab === 'commessa')      renderCommessaCharts(lastResult.commessaResults);
-            else if (tab === 'type-settore')  renderTypoSettoreCharts(lastResult.monthly, lastResult.commessaResults);
         });
     }
 }
@@ -461,7 +1137,7 @@ function loadScenarioList() {
     for (const s of scenarios) {
         const opt = document.createElement('option');
         opt.value = s.id;
-        opt.textContent = s.name;
+        opt.textContent = s.locked ? '\uD83D\uDD12 ' + s.name : s.name;
         sel.appendChild(opt);
     }
 
@@ -471,9 +1147,36 @@ function loadScenarioList() {
 
     sel.addEventListener('change', () => {
         activeScenarioId = sel.value === '__baseline__' ? null : sel.value;
-        renderDashboard();
+        comparedScenarioIds = null; // esci da modalità confronto se attiva
+        refreshDashboard();
         renderAssumptionsTable();
+        if (document.querySelector('.tab-btn.active')?.dataset.tab === 'risorse') {
+            renderResourceTab();
+        }
     });
+
+    loadScenariCompareSelects(scenarios);
+}
+
+function loadScenariCompareSelects(scenarios) {
+    if (!scenarios) scenarios = listScenarios();
+    for (const selId of ['#compare-scen-a', '#compare-scen-b']) {
+        const sel = $(selId);
+        if (!sel) continue;
+        const prev = sel.value;
+        sel.innerHTML = '';
+        const baseOpt = document.createElement('option');
+        baseOpt.value = '__baseline__';
+        baseOpt.textContent = '— Baseline —';
+        sel.appendChild(baseOpt);
+        for (const s of scenarios) {
+            const opt = document.createElement('option');
+            opt.value = s.id;
+            opt.textContent = s.name;
+            sel.appendChild(opt);
+        }
+        if (prev && sel.querySelector(`option[value="${prev}"]`)) sel.value = prev;
+    }
 }
 
 function setupScenarioButtons() {
@@ -486,7 +1189,7 @@ function setupScenarioButtons() {
     $('#btn-create-scenario')?.addEventListener('click', () => {
         const name = $('#new-scenario-name').value.trim() || 'Nuovo Scenario';
         const notes = $('#new-scenario-notes').value.trim();
-        const scen = createScenario(name, notes);
+        const scen = createScenario(name, notes, 'calculated', null, _currentUserEmail);
         activeScenarioId = scen.id;
         loadScenarioList();
         $('#active-scenario-select').value = scen.id;
@@ -498,26 +1201,358 @@ function setupScenarioButtons() {
 
     $('#btn-duplicate-scenario')?.addEventListener('click', () => {
         if (!activeScenarioId) return;
-        const dup = duplicateScenario(activeScenarioId);
+        const orig = getScenario(activeScenarioId);
+        if (!orig) return;
+        $('#duplicate-scenario-name').value = orig.name + ' (copia)';
+        $('#duplicate-scenario-notes').value = orig.notes || '';
+        openModal('duplicate-scenario-modal');
+    });
+
+    $('#btn-confirm-duplicate')?.addEventListener('click', () => {
+        if (!activeScenarioId) return;
+        const name = $('#duplicate-scenario-name').value.trim() || 'Scenario (copia)';
+        const notes = $('#duplicate-scenario-notes').value.trim();
+        const sourceId = activeScenarioId;
+        const dup = duplicateScenario(activeScenarioId, { name, notes, createdBy: _currentUserEmail });
         if (dup) {
             activeScenarioId = dup.id;
+            onScenarioDuplicated(dup.id, sourceId);
             loadScenarioList();
             $('#active-scenario-select').value = dup.id;
-            comparedScenarioIds = null; // Exit comparison mode
+            comparedScenarioIds = null;
+            closeModal('duplicate-scenario-modal');
             refreshDashboard();
             renderAssumptionsTable();
         }
     });
 
+    $('#btn-rename-scenario')?.addEventListener('click', () => {
+        if (!activeScenarioId) return;
+        const scen = getScenario(activeScenarioId);
+        if (!scen) return;
+        if (scen.locked) { alert('Questo scenario è bloccato e non può essere rinominato.'); return; }
+        $('#rename-scenario-name').value = scen.name;
+        $('#rename-scenario-notes').value = scen.notes || '';
+        openModal('rename-scenario-modal');
+    });
+
+    $('#btn-confirm-rename')?.addEventListener('click', () => {
+        if (!activeScenarioId) return;
+        const name = $('#rename-scenario-name').value.trim();
+        if (!name) return;
+        const notes = $('#rename-scenario-notes').value.trim();
+        updateScenario(activeScenarioId, { name, notes });
+        loadScenarioList();
+        $('#active-scenario-select').value = activeScenarioId;
+        closeModal('rename-scenario-modal');
+        refreshDashboard();
+    });
+
     $('#btn-delete-scenario')?.addEventListener('click', () => {
         if (!activeScenarioId) return;
+        const scenDel = getScenario(activeScenarioId);
+        if (scenDel?.locked) { alert('Questo scenario è bloccato e non può essere eliminato.'); return; }
         if (!confirm('Eliminare questo scenario?')) return;
+        trackDeletion('scenario', activeScenarioId);
         deleteScenario(activeScenarioId);
         activeScenarioId = null;
         loadScenarioList();
         comparedScenarioIds = null; // Exit comparison mode
         refreshDashboard();
         renderAssumptionsTable();
+        _restoreFocus();
+    });
+
+    // Gestione Scenari: refresh button (clear cache to force re-fetch)
+    $('#btn-refresh-gestione')?.addEventListener('click', () => { _gestioneCloudData = null; renderGestioneScenari(); });
+}
+
+// ============================================================
+//  GESTIONE SCENARI (Admin Page)
+// ============================================================
+let _gestioneCloudData = null; // cached cloud data for filtering
+let _gestioneFilter = 'all';
+
+async function renderGestioneScenari(useCache = false) {
+    const container = $('#gestione-scenari-container');
+    if (!container) return;
+
+    // Setup filter and search listeners (once)
+    _setupGestioneListeners();
+
+    if (!useCache || !_gestioneCloudData) {
+        container.textContent = 'Caricamento scenari dal cloud...';
+        try {
+            _gestioneCloudData = await fetchAllScenariosFromCloud();
+        } catch (err) {
+            container.textContent = 'Errore: ' + err.message;
+            console.error('[GestioneScenari] fetch error:', err);
+            return;
+        }
+    }
+
+    const cloudRows = _gestioneCloudData || [];
+    const searchQuery = ($('#gestione-search-input')?.value || '').toLowerCase().trim();
+
+    // Apply filters
+    const filtered = cloudRows.filter(row => {
+        const scen = row.data || {};
+        const isDeleted = !!row.deleted;
+        const isDraft = !!row.draft;
+        const isLocked = !!scen.locked;
+
+        // Filter by status
+        if (_gestioneFilter === 'active' && (isDeleted || isDraft || isLocked)) return false;
+        if (_gestioneFilter === 'draft' && !isDraft) return false;
+        if (_gestioneFilter === 'locked' && !isLocked) return false;
+        if (_gestioneFilter === 'deleted' && !isDeleted) return false;
+        if (_gestioneFilter === 'all' && isDeleted) return false; // "Tutti" hides deleted by default
+
+        // Search by name or creator
+        if (searchQuery) {
+            const name = (scen.name || '').toLowerCase();
+            const creator = (row.created_by_email || scen.createdBy || '').toLowerCase();
+            if (!name.includes(searchQuery) && !creator.includes(searchQuery)) return false;
+        }
+
+        return true;
+    });
+
+    if (filtered.length === 0) {
+        container.textContent = _gestioneFilter === 'deleted'
+            ? 'Nessuno scenario eliminato.'
+            : 'Nessuno scenario trovato.';
+        return;
+    }
+
+    // Count label
+    const countDiv = document.createElement('div');
+    countDiv.className = 'gestione-count';
+    countDiv.textContent = filtered.length + ' scenario' + (filtered.length !== 1 ? 'i' : '') + ' trovato' + (filtered.length !== 1 ? 'i' : '');
+
+    const table = document.createElement('table');
+    table.className = 'gestione-table';
+
+    const thead = document.createElement('thead');
+    const headerRow = document.createElement('tr');
+    ['Nome', 'Tipo', 'Creato da', 'Aggiornato', 'Stato', 'Azioni'].forEach(text => {
+        const th = document.createElement('th');
+        th.textContent = text;
+        headerRow.appendChild(th);
+    });
+    thead.appendChild(headerRow);
+    table.appendChild(thead);
+
+    const tbody = document.createElement('tbody');
+
+    for (const row of filtered) {
+        const scen = row.data || {};
+        const isDeleted = !!row.deleted;
+        const tr = document.createElement('tr');
+        if (isDeleted) tr.className = 'row-deleted';
+
+        // Nome
+        const tdName = document.createElement('td');
+        tdName.textContent = scen.name || row.local_id;
+        tdName.style.fontWeight = '600';
+        tr.appendChild(tdName);
+
+        // Tipo
+        const tdType = document.createElement('td');
+        const typeBadge = document.createElement('span');
+        typeBadge.className = scen.type === 'imported' ? 'type-badge order-intake' : 'type-badge backlog';
+        typeBadge.textContent = scen.type === 'imported' ? 'Importato' : 'Calcolato';
+        tdType.appendChild(typeBadge);
+        tr.appendChild(tdType);
+
+        // Creato da
+        const tdCreator = document.createElement('td');
+        tdCreator.textContent = row.created_by_email || scen.createdBy || '\u2014';
+        tdCreator.style.fontSize = '11px';
+        tr.appendChild(tdCreator);
+
+        // Aggiornato
+        const tdUpdated = document.createElement('td');
+        tdUpdated.textContent = scen.updatedAt
+            ? new Date(scen.updatedAt).toLocaleString('it-IT', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+            : '\u2014';
+        tdUpdated.style.fontSize = '11px';
+        tr.appendChild(tdUpdated);
+
+        // Stato (badges + lock info)
+        const tdStatus = document.createElement('td');
+        if (isDeleted) {
+            const badge = document.createElement('span');
+            badge.className = 'badge badge-deleted';
+            badge.textContent = 'Eliminato';
+            tdStatus.appendChild(badge);
+        } else {
+            if (row.draft) {
+                const badge = document.createElement('span');
+                badge.className = 'badge badge-draft';
+                badge.textContent = 'Bozza';
+                tdStatus.appendChild(badge);
+            }
+            if (scen.locked) {
+                const badge = document.createElement('span');
+                badge.className = 'badge badge-locked';
+                badge.textContent = 'Bloccato';
+                tdStatus.appendChild(badge);
+                // Show who locked and when
+                if (scen.lockedBy || scen.lockedAt) {
+                    const info = document.createElement('div');
+                    info.className = 'gestione-lock-info';
+                    const parts = [];
+                    if (scen.lockedBy) parts.push('da ' + scen.lockedBy);
+                    if (scen.lockedAt) parts.push('il ' + new Date(scen.lockedAt).toLocaleString('it-IT', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }));
+                    info.textContent = parts.join(' ');
+                    tdStatus.appendChild(info);
+                }
+            }
+            if (!row.draft && !scen.locked) {
+                const badge = document.createElement('span');
+                badge.className = 'badge badge-active';
+                badge.textContent = 'Attivo';
+                tdStatus.appendChild(badge);
+            }
+        }
+        tr.appendChild(tdStatus);
+
+        // Azioni
+        const tdActions = document.createElement('td');
+        tdActions.className = 'gestione-actions';
+
+        if (isDeleted) {
+            // Restore button for deleted scenarios
+            const restoreBtn = document.createElement('button');
+            restoreBtn.className = 'btn btn-outline btn-xs';
+            restoreBtn.style.color = 'var(--success)';
+            restoreBtn.textContent = 'Ripristina';
+            restoreBtn.addEventListener('click', () => _gestioneAction('restore', row.local_id, scen.name || row.local_id, scen));
+            tdActions.appendChild(restoreBtn);
+        } else {
+            // Lock/Unlock
+            const lockBtn = document.createElement('button');
+            lockBtn.className = 'btn btn-outline btn-xs';
+            lockBtn.textContent = scen.locked ? 'Sblocca' : 'Blocca';
+            lockBtn.addEventListener('click', () => _gestioneAction(scen.locked ? 'unlock' : 'lock', row.local_id, scen.name || row.local_id, scen));
+            tdActions.appendChild(lockBtn);
+
+            // Approve (only if draft)
+            if (row.draft) {
+                const approveBtn = document.createElement('button');
+                approveBtn.className = 'btn btn-outline btn-xs';
+                approveBtn.style.color = 'var(--success)';
+                approveBtn.textContent = 'Approva';
+                approveBtn.addEventListener('click', () => _gestioneAction('approve', row.local_id, scen.name || row.local_id, scen));
+                tdActions.appendChild(approveBtn);
+            }
+
+            // Delete
+            const deleteBtn = document.createElement('button');
+            deleteBtn.className = 'btn btn-outline btn-xs';
+            deleteBtn.style.color = 'var(--danger)';
+            deleteBtn.textContent = 'Elimina';
+            deleteBtn.addEventListener('click', () => _gestioneAction('delete', row.local_id, scen.name || row.local_id, scen));
+            tdActions.appendChild(deleteBtn);
+        }
+
+        tr.appendChild(tdActions);
+        tbody.appendChild(tr);
+    }
+
+    table.appendChild(tbody);
+    container.textContent = '';
+    container.appendChild(countDiv);
+    container.appendChild(table);
+}
+
+let _gestioneListenersSetup = false;
+function _setupGestioneListeners() {
+    if (_gestioneListenersSetup) return;
+    _gestioneListenersSetup = true;
+
+    // Filter buttons
+    document.addEventListener('click', e => {
+        const btn = e.target.closest('.gestione-filter-btn');
+        if (!btn || !btn.dataset.filter) return;
+        _gestioneFilter = btn.dataset.filter;
+        $$('.gestione-filter-btn').forEach(b => b.classList.toggle('active', b.dataset.filter === _gestioneFilter));
+        renderGestioneScenari(true); // use cached data
+    });
+
+    // Search input
+    let searchTimer = null;
+    $('#gestione-search-input')?.addEventListener('input', () => {
+        clearTimeout(searchTimer);
+        searchTimer = setTimeout(() => renderGestioneScenari(true), 250); // debounce
+    });
+}
+
+function _gestioneAction(action, localId, scenName, cloudScenData) {
+    const titles = {
+        lock: 'Bloccare scenario?',
+        unlock: 'Sbloccare scenario?',
+        approve: 'Approvare bozza?',
+        delete: 'Eliminare scenario?',
+        restore: 'Ripristinare scenario?'
+    };
+    const messages = {
+        lock: 'Lo scenario "' + scenName + '" sarà bloccato. Nessuno potrà modificarlo o eliminarlo.',
+        unlock: 'Lo scenario "' + scenName + '" sarà sbloccato e nuovamente modificabile.',
+        approve: 'La bozza "' + scenName + '" diventerà visibile a tutti gli utenti.',
+        delete: 'Lo scenario "' + scenName + '" sarà eliminato definitivamente dal cloud.',
+        restore: 'Lo scenario "' + scenName + '" sarà ripristinato e tornerà visibile a tutti.'
+    };
+
+    $('#gestione-confirm-title').textContent = titles[action] || 'Conferma';
+    $('#gestione-confirm-text').textContent = messages[action] || '';
+    openModal('gestione-confirm-modal');
+
+    const okBtn = $('#gestione-confirm-ok');
+    const cancelBtn = $('#gestione-confirm-cancel');
+
+    // Clone and replace to remove old listeners
+    const newOk = okBtn.cloneNode(true);
+    okBtn.parentNode.replaceChild(newOk, okBtn);
+    const newCancel = cancelBtn.cloneNode(true);
+    cancelBtn.parentNode.replaceChild(newCancel, cancelBtn);
+
+    newCancel.addEventListener('click', () => closeModal('gestione-confirm-modal'));
+
+    newOk.addEventListener('click', async () => {
+        closeModal('gestione-confirm-modal');
+        try {
+            if (action === 'lock') {
+                let updated = lockScenario(localId, _currentUserEmail);
+                if (!updated && cloudScenData) {
+                    updated = { ...cloudScenData, locked: true, lockedBy: _currentUserEmail, lockedAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+                }
+                if (updated) await pushSingleScenario(localId, updated);
+            } else if (action === 'unlock') {
+                let updated = unlockScenario(localId);
+                if (!updated && cloudScenData) {
+                    updated = { ...cloudScenData, locked: false, lockedBy: null, lockedAt: null, updatedAt: new Date().toISOString() };
+                }
+                if (updated) await pushSingleScenario(localId, updated);
+            } else if (action === 'approve') {
+                await pushScenarioApproval(localId, false);
+                setScenarioDraft(localId, false);
+            } else if (action === 'delete') {
+                await pushScenarioDelete(localId);
+                deleteScenario(localId);
+                trackDeletion('scenario', localId);
+            } else if (action === 'restore') {
+                await pushScenarioRestore(localId);
+            }
+            // Refresh: clear cache to re-fetch from cloud
+            _gestioneCloudData = null;
+            loadScenarioList();
+            renderGestioneScenari();
+        } catch (err) {
+            alert('Errore: ' + err.message);
+            console.error('[GestioneScenari] action error:', err);
+        }
     });
 }
 
@@ -564,7 +1599,12 @@ function refreshDashboard() {
         const filters = getActiveFilters();
         const results = computeMultiScenario(appData.commesse, appData.monthlyData, scenarios, filters);
         renderCompareCharts(results);
+    } else if (activeTabId === 'scenario-compare') {
+        // scenario-compare non usa renderCharts — calcola i dati e aggiorna la tabella
+        renderDashboard();
+        renderScenarioCompareTable();
     } else {
+        // renderDashboard → renderCharts gestisce già tutti i tab tramite routing interno
         renderDashboard();
     }
 
@@ -581,11 +1621,17 @@ function refreshDashboard() {
 function renderDashboard() {
     if (!appData) return;
 
+    // Ripristina KPI normali (nasconde la riga compare se attiva)
+    $('#kpi-row')?.classList.remove('hidden');
+    $('#kpi-row-compare')?.classList.add('hidden');
+
     const filters = getActiveFilters();
     const scen = activeScenarioId ? getScenario(activeScenarioId) : null;
     const inputs = scen ? scen.inputs || {} : {};
 
-    lastResult = computeScenario(appData.commesse, appData.monthlyData, scen || {}, filters);
+    const scenNewCommesse = scen?.newCommesse || [];
+    const commesseForCalc = scenNewCommesse.length > 0 ? [...appData.commesse, ...scenNewCommesse] : appData.commesse;
+    lastResult = computeScenario(commesseForCalc, appData.monthlyData, scen || {}, filters);
 
     // Sync sidebar chip data-type with effective type (respects scenario overrides)
     const effectiveTypeMap = {};
@@ -612,11 +1658,7 @@ function refreshTypeFilterChips(commessaResults) {
             btn.className = 'filter-chip';
             btn.dataset.value = et;
             btn.textContent = et;
-            btn.addEventListener('click', () => {
-                btn.classList.toggle('active');
-                filterSidebarCommesse();
-                refreshDashboard();
-            });
+            // Nessun listener diretto: il click è gestito dalla delegation in setupFilterEvents
             typeContainer.appendChild(btn);
         }
     }
@@ -637,11 +1679,26 @@ function formatEuro(n) {
     return Math.round(n).toLocaleString('it-IT') + ' €';
 }
 
+function _formatEuroExact(n) {
+    if (n == null) return '';
+    return Math.round(n).toLocaleString('it-IT') + ' €';
+}
+
 function renderKPIs(kpis) {
-    $('#kpi-val-vdp-base').textContent = formatEuro(kpis.totalBaseVDP);
-    $('#kpi-val-vdp-scen').textContent = formatEuro(kpis.totalScenVDP);
-    $('#kpi-val-margin-base').textContent = formatEuro(kpis.totalBaseMar);
-    $('#kpi-val-margin-scen').textContent = formatEuro(kpis.totalScenMar);
+    const vdpBase = $('#kpi-val-vdp-base');
+    const vdpScen = $('#kpi-val-vdp-scen');
+    const marBase = $('#kpi-val-margin-base');
+    const marScen = $('#kpi-val-margin-scen');
+
+    vdpBase.textContent = formatEuro(kpis.totalBaseVDP);
+    vdpScen.textContent = formatEuro(kpis.totalScenVDP);
+    marBase.textContent = formatEuro(kpis.totalBaseMar);
+    marScen.textContent = formatEuro(kpis.totalScenMar);
+
+    vdpBase.title = _formatEuroExact(kpis.totalBaseVDP);
+    vdpScen.title = _formatEuroExact(kpis.totalScenVDP);
+    marBase.title = _formatEuroExact(kpis.totalBaseMar);
+    marScen.title = _formatEuroExact(kpis.totalScenMar);
 
     renderDelta('#kpi-delta-vdp', kpis.deltaVDP, kpis.deltaVDPPerc);
     renderDelta('#kpi-delta-margin', kpis.deltaMar, kpis.deltaMarPerc);
@@ -652,11 +1709,13 @@ function renderKPIs(kpis) {
 
 
 
+
 function renderDelta(sel, value, perc) {
     const el = $(sel);
     if (!el) return;
     const sign = value >= 0 ? '+' : '';
     el.textContent = `${sign}${formatEuro(value)}  (${sign}${perc.toFixed(1)}%)`;
+    el.title = `${sign}${_formatEuroExact(value)}  (${sign}${perc.toFixed(1)}%)`;
     el.className = 'kpi-delta ' + (value >= 0 ? 'positive' : 'negative');
 }
 
@@ -717,20 +1776,16 @@ function renderCharts(monthly, commessaResults = []) {
     charts = {};
 
     // Route to the correct render function — never render hidden tabs
-    if (activeTab === 'commessa') {
-        renderCommessaCharts(commessaResults);
-        return;
-    }
     if (activeTab === 'details') {
         renderDetailsCharts(monthly, commessaResults);
         return;
     }
-    if (activeTab === 'analisi') {
-        renderAnalisiCharts(monthly, commessaResults);
+    if (activeTab === 'details-type') {
+        renderDetailsTypeCharts(monthly, commessaResults);
         return;
     }
-    if (activeTab === 'type-settore') {
-        renderTypoSettoreCharts(monthly, commessaResults);
+    if (activeTab === 'analisi') {
+        renderAnalisiCharts(monthly, commessaResults);
         return;
     }
     if (activeTab !== 'dashboard') return; // assumptions / unknown tab: nothing to render
@@ -1056,6 +2111,333 @@ function renderDetailsCharts(monthly, commessaResults = []) {
         data: { labels, datasets: marDatasets },
         options: makeOpts(),
     });
+
+    // Render detail tables: if details is already open, render immediately.
+    // Otherwise, render on first toggle. Always re-render on new data (filters).
+    const detailsTablesEl = document.querySelector('#tab-details details');
+    if (detailsTablesEl) {
+        if (detailsTablesEl.open) {
+            _renderDetailsTables(commessaResults, labels);
+        }
+        // Remove old listener by replacing the element's handler attribute
+        const newDetails = detailsTablesEl;
+        newDetails._pendingData = { commessaResults, labels };
+        if (!newDetails._listenerAttached) {
+            newDetails._listenerAttached = true;
+            newDetails.addEventListener('toggle', () => {
+                if (newDetails.open && newDetails._pendingData) {
+                    _renderDetailsTables(newDetails._pendingData.commessaResults, newDetails._pendingData.labels);
+                }
+            });
+        } else {
+            // Listener already attached, just update pending data (already done above)
+        }
+    }
+}
+
+function _renderDetailsTables(commessaResults, months) {
+    const container = $('#details-tables-container');
+    if (!container) return;
+
+    // Build per-commessa monthly data
+    const rows = [];
+    for (const comm of commessaResults) {
+        const label = [comm.codice, comm.nome].filter(Boolean).join(' - ') || 'N/D';
+        const byMonth = {};
+        for (const sm of (comm.scenarioMonths || [])) {
+            if (!byMonth[sm.month]) byMonth[sm.month] = { vdp: 0, margine: 0 };
+            byMonth[sm.month].vdp += sm.vdp || 0;
+            byMonth[sm.month].margine += sm.margine || 0;
+        }
+        const totalVdp = months.reduce((s, m) => s + (byMonth[m]?.vdp || 0), 0);
+        const totalMar = months.reduce((s, m) => s + (byMonth[m]?.margine || 0), 0);
+        if (totalVdp === 0 && totalMar === 0) continue;
+        rows.push({ label, codice: comm.codice || '', byMonth, totalVdp, totalMar });
+    }
+
+    function buildTable(title, field, excelFilename) {
+        const section = document.createElement('div');
+        section.style.marginBottom = '20px';
+
+        const header = document.createElement('div');
+        header.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin:12px 0 8px;';
+
+        const h4 = document.createElement('h4');
+        h4.style.cssText = 'font-size:14px;font-weight:700;margin:0;';
+        h4.textContent = title;
+        header.appendChild(h4);
+
+        const exportBtn = document.createElement('button');
+        exportBtn.className = 'btn btn-outline btn-sm';
+        exportBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Esporta Excel';
+        exportBtn.addEventListener('click', () => {
+            const exRows = [];
+            for (const row of rows) {
+                const entry = { 'Commessa': row.label };
+                for (const m of months) {
+                    entry[m] = Math.round(row.byMonth[m]?.[field] || 0);
+                }
+                entry['Totale'] = Math.round(field === 'vdp' ? row.totalVdp : row.totalMar);
+                exRows.push(entry);
+            }
+            // Add totals row
+            const totEntry = { 'Commessa': 'TOTALE' };
+            for (const m of months) {
+                totEntry[m] = Math.round(rows.reduce((s, r) => s + (r.byMonth[m]?.[field] || 0), 0));
+            }
+            totEntry['Totale'] = Math.round(rows.reduce((s, r) => s + (field === 'vdp' ? r.totalVdp : r.totalMar), 0));
+            exRows.push(totEntry);
+            exportChartToExcel(excelFilename, exRows);
+        });
+        header.appendChild(exportBtn);
+
+        section.appendChild(header);
+
+        const wrapper = document.createElement('div');
+        wrapper.className = 'table-container';
+        wrapper.style.overflowX = 'auto';
+
+        const table = document.createElement('table');
+        table.className = 'details-data-table';
+
+        // Header
+        const thead = document.createElement('thead');
+        const headerRow = document.createElement('tr');
+
+        const thComm = document.createElement('th');
+        thComm.textContent = 'Commessa';
+        thComm.className = 'details-th-sortable';
+        thComm.dataset.sort = 'label';
+        headerRow.appendChild(thComm);
+
+        for (const m of months) {
+            const th = document.createElement('th');
+            th.textContent = m;
+            th.className = 'details-th-month';
+            headerRow.appendChild(th);
+        }
+
+        const thTotal = document.createElement('th');
+        thTotal.textContent = 'Totale';
+        thTotal.className = 'details-th-sortable details-th-total';
+        thTotal.dataset.sort = 'total';
+        headerRow.appendChild(thTotal);
+
+        thead.appendChild(headerRow);
+        table.appendChild(thead);
+
+        // Sort state
+        let sortKey = null;
+        let sortAsc = true;
+
+        function renderBody() {
+            const sorted = [...rows];
+            if (sortKey === 'label') {
+                sorted.sort((a, b) => sortAsc ? a.label.localeCompare(b.label) : b.label.localeCompare(a.label));
+            } else if (sortKey === 'total') {
+                sorted.sort((a, b) => {
+                    const va = field === 'vdp' ? a.totalVdp : a.totalMar;
+                    const vb = field === 'vdp' ? b.totalVdp : b.totalMar;
+                    return sortAsc ? va - vb : vb - va;
+                });
+            }
+
+            let oldTbody = table.querySelector('tbody');
+            if (oldTbody) oldTbody.remove();
+
+            const tbody = document.createElement('tbody');
+
+            for (const row of sorted) {
+                const tr = document.createElement('tr');
+                const tdLabel = document.createElement('td');
+                tdLabel.textContent = row.label;
+                tdLabel.className = 'details-td-commessa';
+                tr.appendChild(tdLabel);
+
+                for (const m of months) {
+                    const td = document.createElement('td');
+                    const val = row.byMonth[m]?.[field] || 0;
+                    td.textContent = val !== 0 ? formatCompact(val) : '';
+                    td.title = val !== 0 ? _formatEuroExact(val) : '';
+                    td.className = 'details-td-value';
+                    if (val < 0) td.style.color = 'var(--danger, #ef4444)';
+                    tr.appendChild(td);
+                }
+
+                const tdTotal = document.createElement('td');
+                const total = field === 'vdp' ? row.totalVdp : row.totalMar;
+                tdTotal.textContent = formatCompact(total);
+                tdTotal.title = _formatEuroExact(total);
+                tdTotal.className = 'details-td-value details-td-total';
+                if (total < 0) tdTotal.style.color = 'var(--danger, #ef4444)';
+                tr.appendChild(tdTotal);
+
+                tbody.appendChild(tr);
+            }
+
+            // Footer with totals
+            const tfoot = document.createElement('tr');
+            tfoot.className = 'details-tfoot';
+            const tfLabel = document.createElement('td');
+            tfLabel.textContent = 'TOTALE';
+            tfLabel.className = 'details-td-commessa';
+            tfLabel.style.fontWeight = '700';
+            tfoot.appendChild(tfLabel);
+
+            let grandTotal = 0;
+            for (const m of months) {
+                const td = document.createElement('td');
+                const sum = rows.reduce((s, r) => s + (r.byMonth[m]?.[field] || 0), 0);
+                td.textContent = sum !== 0 ? formatCompact(sum) : '';
+                td.title = sum !== 0 ? _formatEuroExact(sum) : '';
+                td.className = 'details-td-value';
+                td.style.fontWeight = '700';
+                grandTotal += sum;
+                tfoot.appendChild(td);
+            }
+            const tfTotal = document.createElement('td');
+            tfTotal.textContent = formatCompact(grandTotal);
+            tfTotal.title = _formatEuroExact(grandTotal);
+            tfTotal.className = 'details-td-value details-td-total';
+            tfTotal.style.fontWeight = '700';
+            tfoot.appendChild(tfTotal);
+
+            tbody.appendChild(tfoot);
+            table.appendChild(tbody);
+        }
+
+        // Sort click handlers
+        headerRow.querySelectorAll('.details-th-sortable').forEach(th => {
+            th.style.cursor = 'pointer';
+            th.addEventListener('click', () => {
+                if (sortKey === th.dataset.sort) {
+                    sortAsc = !sortAsc;
+                } else {
+                    sortKey = th.dataset.sort;
+                    sortAsc = true;
+                }
+                // Update sort indicators
+                headerRow.querySelectorAll('.details-th-sortable').forEach(h => h.dataset.sortDir = '');
+                th.dataset.sortDir = sortAsc ? 'asc' : 'desc';
+                renderBody();
+            });
+        });
+
+        renderBody();
+        wrapper.appendChild(table);
+        section.appendChild(wrapper);
+        return section;
+    }
+
+    container.textContent = '';
+    container.appendChild(buildTable('VDP Mensile — Dettaglio per Commessa', 'vdp', 'Tabella_VDP_per_Commessa'));
+    container.appendChild(buildTable('Margine Mensile — Dettaglio per Commessa', 'margine', 'Tabella_Margine_per_Commessa'));
+}
+
+function renderDetailsTypeCharts(monthly, commessaResults = []) {
+    const labels = monthly.map(m => m.month);
+
+    const TYPES = ['Backlog', 'Order Intake'];
+    const TYPE_COLORS = {
+        'Backlog':       { bg: 'rgba(251, 146, 60, 0.80)',  border: '#fb923c' },
+        'Order Intake':  { bg: 'rgba(99,  140, 255, 0.80)', border: '#638cff' },
+    };
+
+    // Aggrega VDP e Margine per tipo per ogni mese
+    const byTypeMonth = {};
+    for (const t of TYPES) byTypeMonth[t] = {};
+
+    for (const comm of commessaResults) {
+        const type = comm.effectiveType || comm.type || 'Backlog';
+        const bucket = TYPES.includes(type) ? type : 'Backlog';
+        for (const sm of (comm.scenarioMonths || [])) {
+            if (!byTypeMonth[bucket][sm.month]) byTypeMonth[bucket][sm.month] = { vdp: 0, margine: 0 };
+            byTypeMonth[bucket][sm.month].vdp     += sm.vdp     || 0;
+            byTypeMonth[bucket][sm.month].margine += sm.margine || 0;
+        }
+    }
+
+    const vdpDatasets = [];
+    const marDatasets  = [];
+
+    for (const type of TYPES) {
+        const color = TYPE_COLORS[type];
+        const vdpData = labels.map(m => byTypeMonth[type][m]?.vdp     || null);
+        const marData = labels.map(m => byTypeMonth[type][m]?.margine || null);
+
+        if (!vdpData.some(v => v != null) && !marData.some(v => v != null)) continue;
+
+        const base = {
+            label:           type,
+            backgroundColor: color.bg,
+            borderColor:     color.border,
+            borderWidth:     1,
+            stack:           'type-details',
+        };
+        vdpDatasets.push({ ...base, data: vdpData });
+        marDatasets.push({ ...base, data: marData });
+    }
+
+    const makeOpts = () => ({
+        responsive: true,
+        maintainAspectRatio: false,
+        layout: { padding: { top: 22 } },
+        interaction: { mode: 'nearest', intersect: true },
+        plugins: {
+            legend: {
+                display: true,
+                position: 'top',
+                labels: { color: '#cbd5e1', font: { family: 'Inter', size: 12 }, boxWidth: 14 },
+            },
+            tooltip: {
+                backgroundColor: '#1a2340',
+                borderColor: 'rgba(255,255,255,0.15)',
+                borderWidth: 1,
+                titleFont: { family: 'Inter', size: 11, weight: 'bold' },
+                bodyFont:  { family: 'Inter', size: 11 },
+                callbacks: {
+                    title: (items) => items[0]?.label ?? '',
+                    label: (ctx) => {
+                        const v = ctx.parsed.y;
+                        if (v == null || v === 0) return null;
+                        return `${ctx.dataset.label}:  ${formatEuro(v)}`;
+                    },
+                },
+            },
+        },
+        scales: {
+            x: {
+                stacked: true,
+                offset: true,
+                ticks: { color: '#5a6478', font: { size: 10 }, maxRotation: 45 },
+                grid:  { color: 'rgba(255,255,255,0.04)' },
+            },
+            y: {
+                stacked: true,
+                beginAtZero: true,
+                ticks: {
+                    color: '#5a6478',
+                    font: { size: 10 },
+                    callback: (v) => formatEuro(v),
+                },
+                grid: { color: 'rgba(255,255,255,0.04)' },
+            },
+        },
+    });
+
+    charts.detailsTypeVdp = new Chart($('#chart-details-type-vdp'), {
+        type: 'bar',
+        plugins: [stackedTotalPlugin],
+        data: { labels, datasets: vdpDatasets },
+        options: makeOpts(),
+    });
+
+    charts.detailsTypeMar = new Chart($('#chart-details-type-mar'), {
+        type: 'bar',
+        plugins: [stackedTotalPlugin],
+        data: { labels, datasets: marDatasets },
+        options: makeOpts(),
+    });
 }
 
 // ============================================================
@@ -1335,117 +2717,159 @@ function renderAnalisiCharts(monthly, commessaResults) {
         },
     });
 
-}
-
-// ============================================================
-//  ANALISI TYPE & SETTORE CHARTS (tab: type-settore)
-// ============================================================
-function renderTypoSettoreCharts(monthly, commessaResults) {
+    // ── 9 & 10. Waterfall VDP / Margine — Delta per Commessa ──────────────────
     if (!commessaResults || !commessaResults.length) return;
 
-    const commonOpts = {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-            legend: { labels: { color: '#8892a8', font: { family: 'Inter', size: 11 } } },
-            tooltip: {
-                backgroundColor: '#1a2340',
-                borderColor: 'rgba(255,255,255,0.1)',
-                borderWidth: 1,
-                titleFont: { family: 'Inter' },
-                bodyFont: { family: 'Inter' },
-                callbacks: { label: (ctx) => `${ctx.dataset.label}: ${formatEuro(ctx.parsed.y)}` },
-            },
-        },
-        scales: {
-            x: { ticks: { color: '#5a6478', font: { size: 10 }, maxRotation: 45 }, grid: { color: 'rgba(255,255,255,0.04)' } },
-            y: { ticks: { color: '#5a6478', font: { size: 10 }, callback: (v) => formatEuro(v) }, grid: { color: 'rgba(255,255,255,0.04)' } },
-        },
-    };
+    const wfTrunc = (s, n) => s && s.length > n ? s.substring(0, n) + '…' : (s || '');
+    const wfLabel = (c) => wfTrunc(c.nome || c.codice, 14);
 
-    const yearlyXScale = {
-        ...commonOpts.scales.x,
-        offset: true,
-        ticks: { ...commonOpts.scales.x.ticks, maxRotation: 0 },
-    };
-    const barLabelOpts = {
-        anchor: 'end',
-        align: 'top',
-        formatter: (v) => v > 0 ? formatCompact(v) : '',
-        font: { family: 'Inter', size: 10, weight: '600' },
-        color: '#3a3f4a',
-        clip: false,
-    };
-    const slimBar = { barPercentage: 0.5, categoryPercentage: 0.75, clip: false };
+    function buildWaterfall(results, getBase, getScen) {
+        const sorted = [...results]
+            .filter(c => Math.round(getScen(c) - getBase(c)) !== 0)
+            .sort((a, b) => (getScen(b) - getBase(b)) - (getScen(a) - getBase(a)));
+        const totalBase = results.reduce((s, c) => s + getBase(c), 0);
+        const totalScen = results.reduce((s, c) => s + getScen(c), 0);
 
-    const typeColors = {
-        'Backlog':      { bg: chartColors.actual.bg,    border: chartColors.actual.border    },
-        'Order Intake': { bg: chartColors.remaining.bg, border: chartColors.remaining.border },
-    };
-    const fallbackTypeColors = [
-        { bg: 'rgba(251,191,36,0.75)', border: '#fbbf24' },
-        { bg: 'rgba(248,113,113,0.75)', border: '#f87171' },
-    ];
+        const labels = ['Baseline', ...sorted.map(wfLabel), 'Scenario'];
+        const data = [], bgs = [], borders = [];
 
-    // --- Chart 1: VDP per Tipo — Baseline vs Scenario (grouped bar) ---
-    const allTypes = [...new Set(['Backlog', 'Order Intake', ...commessaResults.map(c => c.effectiveType || c.type)])];
-    const baseByType = {};
-    const scenByType = {};
-    for (const comm of commessaResults) {
-        const baseT = comm.type || 'Altro';
-        const scenT = comm.effectiveType || comm.type || 'Altro';
-        baseByType[baseT] = (baseByType[baseT] || 0) + comm.baseVdpTot;
-        scenByType[scenT] = (scenByType[scenT] || 0) + comm.scenVdpTot;
+        data.push([0, Math.round(totalBase)]);
+        bgs.push(chartColors.baseline.bg);
+        borders.push(chartColors.baseline.border);
+
+        let running = totalBase;
+        for (const c of sorted) {
+            const delta = getScen(c) - getBase(c);
+            data.push([Math.round(running), Math.round(running + delta)]);
+            running += delta;
+            bgs.push(delta >= 0 ? chartColors.deltaPos.bg : chartColors.deltaNeg.bg);
+            borders.push(delta >= 0 ? chartColors.deltaPos.border : chartColors.deltaNeg.border);
+        }
+
+        data.push([0, Math.round(totalScen)]);
+        bgs.push(chartColors.scenario.bg);
+        borders.push(chartColors.scenario.border);
+
+        return { labels, data, bgs, borders, sorted };
     }
-    let fallbackIdx = 0;
-    const typeComparisonCanvas = $('#chart-type-comparison');
-    if (typeComparisonCanvas) {
-        charts.typeComparison = new Chart(typeComparisonCanvas, {
+
+    function makeWaterfallChart(canvasEl, wfData, keyLabel) {
+        if (!canvasEl) return null;
+        const { labels, data, bgs, borders, sorted } = wfData;
+        const nTotal = data.length;
+
+        return new Chart(canvasEl, {
             type: 'bar',
             plugins: [ChartDataLabels],
             data: {
-                labels: allTypes,
-                datasets: [
-                    {
-                        label: 'Baseline',
-                        data: allTypes.map(t => Math.round(baseByType[t] || 0)),
-                        backgroundColor: chartColors.baseline.bg,
-                        borderColor: chartColors.baseline.border,
-                        borderWidth: 1,
-                        ...slimBar,
-                    },
-                    {
-                        label: 'Scenario',
-                        data: allTypes.map(t => Math.round(scenByType[t] || 0)),
-                        backgroundColor: chartColors.scenario.bg,
-                        borderColor: chartColors.scenario.border,
-                        borderWidth: 1,
-                        ...slimBar,
-                    },
-                ],
+                labels,
+                datasets: [{
+                    label: keyLabel,
+                    data,
+                    backgroundColor: bgs,
+                    borderColor: borders,
+                    borderWidth: 1,
+                    barPercentage: 0.7,
+                    categoryPercentage: 0.85,
+                    clip: false,
+                }],
             },
             options: {
-                ...commonOpts,
-                layout: { padding: { top: 24, left: 8, right: 8 } },
-                scales: { ...commonOpts.scales, x: yearlyXScale },
-                plugins: { ...commonOpts.plugins, datalabels: barLabelOpts },
+                responsive: true,
+                maintainAspectRatio: false,
+                layout: { padding: { top: 28, left: 8, right: 8 } },
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        backgroundColor: '#1a2340',
+                        borderColor: 'rgba(255,255,255,0.1)',
+                        borderWidth: 1,
+                        titleFont: { family: 'Inter' },
+                        bodyFont: { family: 'Inter' },
+                        callbacks: {
+                            label: (ctx) => {
+                                const raw = ctx.raw;
+                                if (!Array.isArray(raw)) return '';
+                                if (ctx.dataIndex === 0) return `Baseline: ${formatEuro(raw[1])}`;
+                                if (ctx.dataIndex === nTotal - 1) return `Scenario: ${formatEuro(raw[1])}`;
+                                const delta = raw[1] - raw[0];
+                                const comm = sorted[ctx.dataIndex - 1];
+                                const lines = [`Δ ${keyLabel}: ${delta >= 0 ? '+' : ''}${formatEuro(delta)}`];
+                                if (comm) {
+                                    const base = keyLabel === 'VDP' ? comm.baseVdpTot : comm.baseMarTot;
+                                    const scen = keyLabel === 'VDP' ? comm.scenVdpTot : comm.scenMarTot;
+                                    lines.push(`Baseline: ${formatEuro(base)}`);
+                                    lines.push(`Scenario: ${formatEuro(scen)}`);
+                                }
+                                return lines;
+                            },
+                        },
+                    },
+                    datalabels: {
+                        anchor: (ctx) => {
+                            const raw = ctx.dataset.data[ctx.dataIndex];
+                            if (!Array.isArray(raw)) return 'end';
+                            const isEdge = ctx.dataIndex === 0 || ctx.dataIndex === nTotal - 1;
+                            return (isEdge || raw[1] - raw[0] >= 0) ? 'end' : 'start';
+                        },
+                        align: (ctx) => {
+                            const raw = ctx.dataset.data[ctx.dataIndex];
+                            if (!Array.isArray(raw)) return 'top';
+                            const isEdge = ctx.dataIndex === 0 || ctx.dataIndex === nTotal - 1;
+                            return (isEdge || raw[1] - raw[0] >= 0) ? 'top' : 'bottom';
+                        },
+                        formatter: (v, ctx) => {
+                            if (!Array.isArray(v)) return '';
+                            const isEdge = ctx.dataIndex === 0 || ctx.dataIndex === nTotal - 1;
+                            if (isEdge) return formatCompact(v[1]);
+                            const delta = v[1] - v[0];
+                            if (delta === 0) return '';
+                            return (delta > 0 ? '+' : '−') + formatCompact(Math.abs(delta));
+                        },
+                        font: { family: 'Inter', size: 9, weight: '600' },
+                        color: '#3a3f4a',
+                        clip: false,
+                    },
+                },
+                scales: {
+                    x: {
+                        ticks: { color: '#5a6478', font: { size: 8 }, maxRotation: 90, minRotation: 45 },
+                        grid: { color: 'rgba(255,255,255,0.04)' },
+                    },
+                    y: {
+                        ticks: { color: '#5a6478', font: { size: 10 }, callback: (v) => formatCompact(v) },
+                        grid: { color: 'rgba(255,255,255,0.04)' },
+                    },
+                },
             },
         });
     }
 
-    // --- Chart 2: Commesse con cambio Type (horizontal bar) ---
+    const wfVdp = buildWaterfall(commessaResults, c => c.baseVdpTot, c => c.scenVdpTot);
+    charts.wfVdp = makeWaterfallChart($('#chart-wf-vdp'), wfVdp, 'VDP');
+
+    const wfMar = buildWaterfall(commessaResults, c => c.baseMarTot, c => c.scenMarTot);
+    charts.wfMar = makeWaterfallChart($('#chart-wf-mar'), wfMar, 'Margine');
+
+    // --- Commesse con cambio Type (horizontal bar) ---
+    const typeColorsTC = {
+        'Backlog':      { bg: chartColors.actual.bg,    border: chartColors.actual.border    },
+        'Order Intake': { bg: chartColors.remaining.bg, border: chartColors.remaining.border },
+    };
+    const fallbackTC = [
+        { bg: 'rgba(251,191,36,0.75)', border: '#fbbf24' },
+        { bg: 'rgba(248,113,113,0.75)', border: '#f87171' },
+    ];
     const truncate = (s, n) => s && s.length > n ? s.substring(0, n) + '…' : (s || '');
     const typeChanges = commessaResults.filter(c => (c.effectiveType || c.type) !== c.type);
     const wrapTypeChanges = document.getElementById('wrap-type-changes');
 
-    // Ensure canvas is always present (never destroy it via innerHTML)
     if (wrapTypeChanges && !wrapTypeChanges.querySelector('#chart-type-changes')) {
         const cv = document.createElement('canvas');
         cv.id = 'chart-type-changes';
         wrapTypeChanges.innerHTML = '';
         wrapTypeChanges.appendChild(cv);
     }
-    // Remove any previous no-data messages
     wrapTypeChanges?.querySelectorAll('.no-data-msg').forEach(el => el.remove());
 
     const typeChangesCanvas = $('#chart-type-changes');
@@ -1464,13 +2888,12 @@ function renderTypoSettoreCharts(monthly, commessaResults) {
         const tcData = typeChanges.map(c => Math.round(c.scenVdpTot));
         const tcColors = typeChanges.map(c => {
             const et = c.effectiveType || c.type;
-            return (typeColors[et] || fallbackTypeColors[0]).bg;
+            return (typeColorsTC[et] || fallbackTC[0]).bg;
         });
         const tcDirLabels = typeChanges.map(c => {
             const et = c.effectiveType || c.type;
-            return et === 'Order Intake' ? '↑ OI' : '↓ BL';
+            return et === 'Backlog' ? '↑ BL' : '↓ OI';
         });
-        fallbackIdx = 0;
         if (wrapTypeChanges) {
             wrapTypeChanges.style.height = Math.max(280, typeChanges.length * 28 + 80) + 'px';
         }
@@ -1523,64 +2946,7 @@ function renderTypoSettoreCharts(monthly, commessaResults) {
         });
     }
 
-    // --- Chart 3: VDP Scenario per Settore × Tipo (stacked bar) ---
-    const settoriSet = new Set(commessaResults.map(c => c.settore || '?'));
-    const settoriList = [...settoriSet].sort();
-    const typeSetForChart = new Set(commessaResults.map(c => c.effectiveType || c.type || 'Altro'));
-    const allTypesForChart = [...typeSetForChart].sort();
-    const settoreTypeVdp = {}; // { settore: { type: vdp } }
-    for (const comm of commessaResults) {
-        const s = comm.settore || '?';
-        const t = comm.effectiveType || comm.type || 'Altro';
-        if (!settoreTypeVdp[s]) settoreTypeVdp[s] = {};
-        settoreTypeVdp[s][t] = (settoreTypeVdp[s][t] || 0) + comm.scenVdpTot;
-    }
-    fallbackIdx = 0;
-    const settoreTypeDatasets = allTypesForChart.map(type => {
-        const col = typeColors[type] || fallbackTypeColors[fallbackIdx++ % fallbackTypeColors.length];
-        return {
-            label: type,
-            data: settoriList.map(s => Math.round((settoreTypeVdp[s] || {})[type] || 0)),
-            backgroundColor: col.bg,
-            borderColor: col.border,
-            borderWidth: 1,
-            stack: 'scen',
-            barPercentage: 0.5,
-            categoryPercentage: 0.7,
-            clip: false,
-        };
-    });
-    const settoreTypeCanvas = $('#chart-settore-type');
-    if (settoreTypeCanvas) {
-        const stTotal = settoriList.flatMap(s => allTypesForChart.map(t => (settoreTypeVdp[s] || {})[t] || 0)).reduce((a, b) => a + b, 0);
-        const stThreshold = stTotal / Math.max(settoriList.length * allTypesForChart.length, 1) * 0.15;
-        charts.settoreType = new Chart(settoreTypeCanvas, {
-            type: 'bar',
-            plugins: [ChartDataLabels],
-            data: { labels: settoriList, datasets: settoreTypeDatasets },
-            options: {
-                ...commonOpts,
-                layout: { padding: { top: 24, left: 8, right: 8 } },
-                scales: {
-                    ...commonOpts.scales,
-                    x: { ...yearlyXScale, stacked: true },
-                    y: { ...commonOpts.scales.y, stacked: true },
-                },
-                plugins: {
-                    ...commonOpts.plugins,
-                    datalabels: {
-                        anchor: 'center',
-                        align: 'center',
-                        formatter: (v) => v > stThreshold ? formatCompact(v) : '',
-                        font: { family: 'Inter', size: 10, weight: '700' },
-                        color: '#3a3f4a',
-                    },
-                },
-            },
-        });
-    }
-
-    // --- Chart 4: VDP Scenario per Settore (doughnut) ---
+    // --- VDP Scenario per Settore (doughnut) ---
     const settoreVdp = {};
     for (const comm of commessaResults) {
         const s = comm.settore || '?';
@@ -1621,7 +2987,7 @@ function renderTypoSettoreCharts(monthly, commessaResults) {
                         },
                     },
                     datalabels: {
-                        formatter: (value, ctx) => {
+                        formatter: (value) => {
                             const pct = pieTotal > 0 ? (value / pieTotal * 100) : 0;
                             if (pct < 4) return '';
                             return `${pct.toFixed(1)}%\n${formatCompact(value)}`;
@@ -1634,126 +3000,6 @@ function renderTypoSettoreCharts(monthly, commessaResults) {
             },
         });
     }
-}
-
-// ============================================================
-//  ANALISI COMMESSA CHARTS
-// ============================================================
-function renderCommessaCharts(commessaResults) {
-    if (!commessaResults || !commessaResults.length) return;
-
-    const truncate = (s, n) => s && s.length > n ? s.substring(0, n) + '…' : (s || '');
-    const commLabel = (c) => truncate(`${c.codice} · ${c.nome}`, 35);
-
-    const posColor  = { bg: 'rgba(52,211,153,0.75)',  border: '#34d399' };
-    const negColor  = { bg: 'rgba(248,113,113,0.75)', border: '#f87171' };
-    const zeroColor = { bg: 'rgba(120,130,150,0.4)',  border: '#78828a' };
-
-    function barColor(val, key) {
-        if (val > 0) return key === 'bg' ? posColor.bg : posColor.border;
-        if (val < 0) return key === 'bg' ? negColor.bg : negColor.border;
-        return key === 'bg' ? zeroColor.bg : zeroColor.border;
-    }
-
-    const hBarOpts = (nItems) => ({
-        responsive: true,
-        maintainAspectRatio: false,
-        indexAxis: 'y',
-        clip: false,
-        layout: { padding: { top: 4, bottom: 4, right: 70 } },
-        plugins: {
-            legend: { display: false },
-            tooltip: {
-                backgroundColor: '#1a2340',
-                borderColor: 'rgba(255,255,255,0.1)',
-                borderWidth: 1,
-                callbacks: {
-                    label: (ctx) => {
-                        const c = commessaResults.find(x => commLabel(x) === ctx.label);
-                        if (!ctx.dataset._key) return formatEuro(ctx.parsed.x);
-                        const key = ctx.dataset._key;
-                        const base = key === 'vdp' ? c?.baseVdpTot : c?.baseMarTot;
-                        const scen = key === 'vdp' ? c?.scenVdpTot : c?.scenMarTot;
-                        return [
-                            ` Delta: ${formatEuro(ctx.parsed.x)}`,
-                            ` Baseline: ${formatEuro(base)}`,
-                            ` Scenario: ${formatEuro(scen)}`,
-                        ];
-                    },
-                },
-            },
-            datalabels: {
-                anchor: 'end',
-                align: (ctx) => ctx.dataset.data[ctx.dataIndex] >= 0 ? 'right' : 'left',
-                formatter: (v) => v !== 0 ? formatCompact(v) : '',
-                font: { family: 'Inter', size: 10, weight: '600' },
-                color: '#3a3f4a',
-                clip: false,
-            },
-        },
-        scales: {
-            x: {
-                ticks: { color: '#5a6478', font: { size: 10 }, callback: (v) => formatCompact(v) },
-                grid: { color: 'rgba(255,255,255,0.04)' },
-            },
-            y: {
-                ticks: { color: '#8892a8', font: { family: 'Inter', size: 10 } },
-                grid: { color: 'rgba(255,255,255,0.04)' },
-            },
-        },
-    });
-
-    // Altezza dinamica: 28px per voce + 80px di margine
-    function setWrapHeight(wrapId, n) {
-        const el = document.getElementById(wrapId);
-        if (el) el.style.height = Math.max(320, n * 28 + 80) + 'px';
-    }
-
-    // ── Chart 1: Delta VDP ──────────────────────────────────────
-    const byVdp = [...commessaResults].sort((a, b) => b.deltaVdp - a.deltaVdp);
-    setWrapHeight('wrap-delta-vdp', byVdp.length);
-
-    charts.deltaVdp = new Chart($('#chart-delta-vdp'), {
-        type: 'bar',
-        plugins: [ChartDataLabels],
-        data: {
-            labels: byVdp.map(commLabel),
-            datasets: [{
-                label: 'Δ VDP',
-                _key: 'vdp',
-                data: byVdp.map(c => Math.round(c.deltaVdp)),
-                backgroundColor: byVdp.map(c => barColor(c.deltaVdp, 'bg')),
-                borderColor:     byVdp.map(c => barColor(c.deltaVdp, 'border')),
-                borderWidth: 1,
-                barPercentage: 0.65,
-                categoryPercentage: 0.85,
-            }],
-        },
-        options: hBarOpts(byVdp.length),
-    });
-
-    // ── Chart 2: Delta Margine ──────────────────────────────────
-    const byMar = [...commessaResults].sort((a, b) => b.deltaMar - a.deltaMar);
-    setWrapHeight('wrap-delta-mar', byMar.length);
-
-    charts.deltaMar = new Chart($('#chart-delta-mar'), {
-        type: 'bar',
-        plugins: [ChartDataLabels],
-        data: {
-            labels: byMar.map(commLabel),
-            datasets: [{
-                label: 'Δ Margine',
-                _key: 'mar',
-                data: byMar.map(c => Math.round(c.deltaMar)),
-                backgroundColor: byMar.map(c => barColor(c.deltaMar, 'bg')),
-                borderColor:     byMar.map(c => barColor(c.deltaMar, 'border')),
-                borderWidth: 1,
-                barPercentage: 0.65,
-                categoryPercentage: 0.85,
-            }],
-        },
-        options: hBarOpts(byMar.length),
-    });
 }
 
 // ============================================================
@@ -1772,7 +3018,11 @@ function renderAssumptionsTable() {
     const filters = getActiveFilters();
     const searchQuery = ($('#commessa-search')?.value || '').toLowerCase().trim();
 
-    for (const comm of appData.commesse) {
+    // Unisce commesse AOP + eventuali nuove commesse dello scenario importato
+    const scenNewCommesse = scen?.newCommesse || [];
+    const allCommesseForTable = scenNewCommesse.length > 0 ? [...appData.commesse, ...scenNewCommesse] : appData.commesse;
+
+    for (const comm of allCommesseForTable) {
         // Sector Filter
         if (filters.settori && filters.settori.length && !filters.settori.includes(comm.settore)) continue;
         // Type Filter — use effective type (respects scenario override)
@@ -1987,6 +3237,541 @@ function setupGlobalSliders() {
     });
 }
 
+// ============================================================
+//  SCENARIO COMPARISON TABLE (tab: scenario-compare)
+// ============================================================
+
+// Sorting state for the comparison table
+let scenCompareSortCol = null;   // column key string
+let scenCompareSortDir = 'asc';  // 'asc' | 'desc'
+
+function setupScenarioCompareTab() {
+    for (const selId of ['#compare-scen-a', '#compare-scen-b']) {
+        $(selId)?.addEventListener('change', () => renderScenarioCompareTable());
+    }
+
+    // Column sort — delegated on the thead
+    $('#scen-compare-table')?.addEventListener('click', (e) => {
+        const th = e.target.closest('th[data-sort]');
+        if (!th) return;
+        const col = th.dataset.sort;
+        if (scenCompareSortCol === col) {
+            scenCompareSortDir = scenCompareSortDir === 'asc' ? 'desc' : 'asc';
+        } else {
+            scenCompareSortCol = col;
+            scenCompareSortDir = 'asc';
+        }
+        renderScenarioCompareTable();
+    });
+}
+
+function renderScenarioCompareTable() {
+    if (!appData) return;
+
+    const scenAId = $('#compare-scen-a')?.value;
+    const scenBId = $('#compare-scen-b')?.value;
+    const scenA = (scenAId && scenAId !== '__baseline__') ? getScenario(scenAId) : null;
+    const scenB = (scenBId && scenBId !== '__baseline__') ? getScenario(scenBId) : null;
+    const nameA = scenA ? scenA.name : 'Baseline';
+    const nameB = scenB ? scenB.name : 'Baseline';
+
+    const filters = getActiveFilters();
+
+    // Include newCommesse from both scenarios
+    const newComA = scenA?.newCommesse || [];
+    const newComB = scenB?.newCommesse || [];
+    const extraKeys = new Set(newComA.map(c => c.key));
+    const mergedNew = [...newComA];
+    for (const c of newComB) { if (!extraKeys.has(c.key)) mergedNew.push(c); }
+    const commesseForCalc = mergedNew.length ? [...appData.commesse, ...mergedNew] : appData.commesse;
+
+    const resultA = computeScenario(commesseForCalc, appData.monthlyData, scenA || {}, filters);
+    const resultB = computeScenario(commesseForCalc, appData.monthlyData, scenB || {}, filters);
+
+    const mapA = new Map(resultA.commessaResults.map(c => [c.key, c]));
+    const mapB = new Map(resultB.commessaResults.map(c => [c.key, c]));
+    const allKeys = new Set([...mapA.keys(), ...mapB.keys()]);
+
+    const rows = [];
+    for (const key of allKeys) {
+        const ca = mapA.get(key);
+        const cb = mapB.get(key);
+        const comm = ca || cb;
+        rows.push({
+            key,
+            codice:       comm.codice || '—',
+            nome:         comm.nome   || '—',
+            typeA:        ca?.effectiveType || '—',
+            typeB:        cb?.effectiveType || '—',
+            probA:        ca?.effectiveProbabilita ?? null,
+            probB:        cb?.effectiveProbabilita ?? null,
+            margPercA:    ca?.effectiveMargine ?? null,
+            margPercB:    cb?.effectiveMargine ?? null,
+            vdpA:         ca?.scenVdpTot || 0,
+            vdpB:         cb?.scenVdpTot || 0,
+            margA:        ca?.scenMarTot || 0,
+            margB:        cb?.scenMarTot || 0,
+            deltaVdp:    (cb?.scenVdpTot || 0) - (ca?.scenVdpTot || 0),
+            deltaMar:    (cb?.scenMarTot || 0) - (ca?.scenMarTot || 0),
+            typeChanged:  (ca?.effectiveType || '—') !== (cb?.effectiveType || '—'),
+            originalType: comm.type || 'Altro',
+        });
+    }
+
+    // ── Sorting ──
+    const sortKey = scenCompareSortCol;
+    const sortDir = scenCompareSortDir === 'asc' ? 1 : -1;
+    if (sortKey) {
+        rows.sort((a, b) => {
+            let va = a[sortKey], vb = b[sortKey];
+            if (va == null) va = sortDir === 1 ? Infinity : -Infinity;
+            if (vb == null) vb = sortDir === 1 ? Infinity : -Infinity;
+            if (typeof va === 'string') return va.localeCompare(vb) * sortDir;
+            return (va - vb) * sortDir;
+        });
+    } else {
+        // Default: codice alphabetical
+        rows.sort((a, b) => (a.codice || '').localeCompare(b.codice || ''));
+    }
+
+    // ── Subtotals per tipo effettivo di ciascuno scenario (non il tipo originale) ──
+    // subA[tipo] = somma vdpA/margA delle commesse con typeA === tipo
+    // subB[tipo] = somma vdpB/margB delle commesse con typeB === tipo
+    // Il delta per categoria = subB[tipo].vdp - subA[tipo].vdp
+    const subA = {};
+    const subB = {};
+    const grand = { vdpA: 0, vdpB: 0, margA: 0, margB: 0, deltaVdp: 0, deltaMar: 0 };
+    for (const r of rows) {
+        const tA = r.typeA || 'Altro';
+        const tB = r.typeB || 'Altro';
+        if (!subA[tA]) subA[tA] = { vdp: 0, marg: 0 };
+        if (!subB[tB]) subB[tB] = { vdp: 0, marg: 0 };
+        subA[tA].vdp  += r.vdpA;
+        subA[tA].marg += r.margA;
+        subB[tB].vdp  += r.vdpB;
+        subB[tB].marg += r.margB;
+        grand.vdpA     += r.vdpA;
+        grand.vdpB     += r.vdpB;
+        grand.margA    += r.margA;
+        grand.margB    += r.margB;
+        grand.deltaVdp += r.deltaVdp;
+        grand.deltaMar += r.deltaMar;
+    }
+
+    // ── KPI header ──
+    const kpiContainer = $('#scen-compare-kpis');
+    if (kpiContainer) {
+        const dVdp = grand.deltaVdp;
+        const dMar = grand.deltaMar;
+        const pVdp = resultA.kpis.totalScenVDP ? (dVdp / resultA.kpis.totalScenVDP * 100) : 0;
+        const pMar = resultA.kpis.totalScenMar ? (dMar / resultA.kpis.totalScenMar * 100) : 0;
+        kpiContainer.innerHTML = `
+          <div class="scen-kpi-block scen-kpi-a">
+            <div class="scen-kpi-title">${nameA}</div>
+            <div class="scen-kpi-val">${formatEuro(resultA.kpis.totalScenVDP)}</div>
+            <div class="scen-kpi-sub">Marg. ${formatEuro(resultA.kpis.totalScenMar)}</div>
+          </div>
+          <div class="scen-kpi-vs">VS</div>
+          <div class="scen-kpi-block scen-kpi-b">
+            <div class="scen-kpi-title">${nameB}</div>
+            <div class="scen-kpi-val">${formatEuro(resultB.kpis.totalScenVDP)}</div>
+            <div class="scen-kpi-sub">Marg. ${formatEuro(resultB.kpis.totalScenMar)}</div>
+          </div>
+          <div class="scen-kpi-block scen-kpi-delta">
+            <div class="scen-kpi-title">Δ B − A</div>
+            <div class="scen-kpi-val ${dVdp >= 0 ? 'delta-pos' : 'delta-neg'}">${dVdp >= 0 ? '+' : ''}${formatEuro(dVdp)} <span class="scen-kpi-perc">(${pVdp >= 0 ? '+' : ''}${pVdp.toFixed(1)}%)</span></div>
+            <div class="scen-kpi-sub ${dMar >= 0 ? 'delta-pos' : 'delta-neg'}">Δ Marg. ${dMar >= 0 ? '+' : ''}${formatEuro(dMar)} <span class="scen-kpi-perc">(${pMar >= 0 ? '+' : ''}${pMar.toFixed(1)}%)</span></div>
+          </div>`;
+    }
+
+    // ── Update header sort indicators ──
+    $$('#scen-compare-table thead th[data-sort]').forEach(th => {
+        th.classList.remove('sort-asc', 'sort-desc');
+        if (th.dataset.sort === scenCompareSortCol) {
+            th.classList.add(scenCompareSortDir === 'asc' ? 'sort-asc' : 'sort-desc');
+        }
+    });
+
+    // ── Table body: data rows (no group separators) ──
+    const tbody = $('#scen-compare-tbody');
+    if (!tbody) return;
+    tbody.innerHTML = '';
+
+    const fmtProb  = v => (v != null ? (v * 100).toFixed(0) + '%' : '—');
+    const fmtPerc  = v => (v != null ? (v * 100).toFixed(1) + '%' : '—');
+    const dCls     = v => v > 0 ? 'delta-pos' : v < 0 ? 'delta-neg' : '';
+    const fmtDelta = v => (v === 0 ? '—' : (v > 0 ? '+' : '') + formatEuro(v));
+
+    for (const row of rows) {
+        const tr = document.createElement('tr');
+        if (row.typeChanged) tr.classList.add('scen-row-type-changed');
+
+        const typeBadge = row.typeChanged
+            ? `<span class="scen-type-badge scen-type-changed" title="Tipo cambiato tra i due scenari">↔</span>`
+            : '';
+
+        tr.innerHTML = `
+          <td>${row.codice}</td>
+          <td class="scen-nome">${row.nome}</td>
+          <td><span class="type-badge type-${(row.typeA || '').replace(/\s+/g, '-').toLowerCase()}">${row.typeA}</span></td>
+          <td><span class="type-badge type-${(row.typeB || '').replace(/\s+/g, '-').toLowerCase()}">${row.typeB}</span>${typeBadge}</td>
+          <td class="col-num">${fmtProb(row.probA)}</td>
+          <td class="col-num">${fmtProb(row.probB)}</td>
+          <td class="col-num">${formatEuro(row.vdpA)}</td>
+          <td class="col-num">${formatEuro(row.vdpB)}</td>
+          <td class="col-num ${dCls(row.deltaVdp)}">${fmtDelta(row.deltaVdp)}</td>
+          <td class="col-num">${fmtPerc(row.margPercA)}</td>
+          <td class="col-num">${fmtPerc(row.margPercB)}</td>
+          <td class="col-num ${dCls(row.deltaMar)}">${fmtDelta(row.deltaMar)}</td>`;
+        tbody.appendChild(tr);
+    }
+
+    // ── Footer matriciale: subtotale OI, subtotale BL, totale generale ──
+    // VDP A = somma commesse con typeA === categoria
+    // VDP B = somma commesse con typeB === categoria
+    // Δ = VDP B (categoria) - VDP A (categoria)
+    const footerTypes = ['Order Intake', 'Backlog'];
+    let firstFooter = true;
+    for (const t of footerTypes) {
+        const sA = subA[t]; const sB = subB[t];
+        if (!sA && !sB) continue;
+        const vdpA  = sA?.vdp  || 0;
+        const vdpB  = sB?.vdp  || 0;
+        const margA = sA?.marg || 0;
+        const margB = sB?.marg || 0;
+        const dVdp  = vdpB  - vdpA;
+        const dMar  = margB - margA;
+        const tr = document.createElement('tr');
+        tr.className = 'scen-compare-subtotal' + (firstFooter ? ' scen-footer-first' : '');
+        firstFooter = false;
+        tr.innerHTML = `
+          <td colspan="6"><strong>Totale ${t}</strong></td>
+          <td class="col-num"><strong>${formatEuro(vdpA)}</strong></td>
+          <td class="col-num"><strong>${formatEuro(vdpB)}</strong></td>
+          <td class="col-num ${dCls(dVdp)}"><strong>${fmtDelta(dVdp)}</strong></td>
+          <td class="col-num"></td>
+          <td class="col-num"></td>
+          <td class="col-num ${dCls(dMar)}"><strong>${fmtDelta(dMar)}</strong></td>`;
+        tbody.appendChild(tr);
+    }
+
+    const totalTr = document.createElement('tr');
+    totalTr.className = 'scen-compare-grand-total';
+    totalTr.innerHTML = `
+      <td colspan="6"><strong>TOTALE GENERALE</strong></td>
+      <td class="col-num"><strong>${formatEuro(grand.vdpA)}</strong></td>
+      <td class="col-num"><strong>${formatEuro(grand.vdpB)}</strong></td>
+      <td class="col-num ${dCls(grand.deltaVdp)}"><strong>${fmtDelta(grand.deltaVdp)}</strong></td>
+      <td class="col-num"></td>
+      <td class="col-num"></td>
+      <td class="col-num ${dCls(grand.deltaMar)}"><strong>${fmtDelta(grand.deltaMar)}</strong></td>`;
+    tbody.appendChild(totalTr);
+
+    // ── Charts ──
+    renderScenarioCompareCharts(rows, subA, subB, grand, nameA, nameB);
+}
+
+function renderScenarioCompareCharts(rows, subA, subB, grand, nameA, nameB) {
+    // Destroy previous instances
+    charts.scenWaterfall?.destroy();
+    delete charts.scenWaterfall;
+    charts.scenDeltaRank?.destroy();
+    delete charts.scenDeltaRank;
+    charts.scenWaterfallMar?.destroy();
+    delete charts.scenWaterfallMar;
+    charts.scenDeltaRankMar?.destroy();
+    delete charts.scenDeltaRankMar;
+
+    const ACCENT  = '#638cff';
+    const SUCCESS = '#34d399';
+    const DANGER  = '#ff5f5f';
+    const TICK_COLOR = '#5a6478';
+    const GRID_COLOR = 'rgba(255,255,255,0.04)';
+
+    // ── Chart 1: Bridge / Waterfall VDP ──
+    const deltaOI = (subB['Order Intake']?.vdp || 0) - (subA['Order Intake']?.vdp || 0);
+    const deltaBL = (subB['Backlog']?.vdp || 0) - (subA['Backlog']?.vdp || 0);
+    const vdpA = grand.vdpA;
+    const vdpB = grand.vdpB;
+
+    const runOI = vdpA + deltaOI;
+    const runBL = runOI + deltaBL;
+
+    // Floating bars: [start, end]
+    const wfData = [
+        [0, vdpA],        // Scenario A anchor
+        [vdpA, runOI],    // Δ Order Intake
+        [runOI, runBL],   // Δ Backlog
+        [0, vdpB],        // Scenario B anchor
+    ];
+    const _wrapLabel = (s) => s.length > 12 ? s.split(' ') : s;
+    const wfLabels = [_wrapLabel(nameA), ['Δ Order', 'Intake'], 'Δ Backlog', _wrapLabel(nameB)];
+    const wfColors = [
+        ACCENT,
+        deltaOI >= 0 ? SUCCESS : DANGER,
+        deltaBL >= 0 ? SUCCESS : DANGER,
+        ACCENT,
+    ];
+
+    // Update chart title
+    const titleEl = $('#scen-waterfall-title');
+    if (titleEl) titleEl.textContent = `Bridge VDP — ${nameA} → ${nameB}`;
+
+    const wfCanvas = $('#chart-scen-waterfall');
+    if (wfCanvas) {
+        charts.scenWaterfall = new Chart(wfCanvas, {
+            type: 'bar',
+            data: {
+                labels: wfLabels,
+                datasets: [{
+                    label: 'VDP',
+                    data: wfData,
+                    backgroundColor: wfColors,
+                    borderColor: wfColors,
+                    borderWidth: 1,
+                    borderRadius: 4,
+                }],
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        callbacks: {
+                            label: ctx => {
+                                const d = ctx.raw;
+                                const val = Array.isArray(d) ? d[1] - d[0] : d;
+                                return ` ${val >= 0 ? '+' : ''}${formatEuro(val)}`;
+                            },
+                        },
+                    },
+                    datalabels: {
+                        anchor: ctx => {
+                            const d = ctx.dataset.data[ctx.dataIndex];
+                            const val = Array.isArray(d) ? d[1] - d[0] : d;
+                            return val >= 0 ? 'end' : 'start';
+                        },
+                        align: ctx => {
+                            const d = ctx.dataset.data[ctx.dataIndex];
+                            const val = Array.isArray(d) ? d[1] - d[0] : d;
+                            return val >= 0 ? 'top' : 'bottom';
+                        },
+                        formatter: (_, ctx) => {
+                            const d = ctx.dataset.data[ctx.dataIndex];
+                            const v = Array.isArray(d) ? d[1] - d[0] : d;
+                            return formatEuro(v);
+                        },
+                        color: ctx => {
+                            const d = ctx.dataset.data[ctx.dataIndex];
+                            const v = Array.isArray(d) ? d[1] - d[0] : d;
+                            return v >= 0 ? '#1a1a1a' : DANGER;
+                        },
+                        font: { size: 11, weight: '500' },
+                    },
+                },
+                scales: {
+                    x: {
+                        ticks: { color: TICK_COLOR, font: { size: 11 } },
+                        grid: { color: GRID_COLOR },
+                    },
+                    y: {
+                        ticks: { color: TICK_COLOR, font: { size: 10 }, callback: v => formatEuro(v) },
+                        grid: { color: GRID_COLOR },
+                    },
+                },
+            },
+            plugins: [ChartDataLabels],
+        });
+    }
+
+    // ── Shared rank chart builder ──
+    function buildRankChart(canvasId, chartKey, allRows, deltaField, label, topN) {
+        charts[chartKey]?.destroy();
+        delete charts[chartKey];
+        const sorted = [...allRows]
+            .filter(r => r[deltaField] !== 0)
+            .sort((a, b) => Math.abs(b[deltaField]) - Math.abs(a[deltaField]));
+        const ranked = topN > 0 ? sorted.slice(0, topN) : sorted;
+
+        const rankLabels = ranked.map(r => r.nome || r.codice || '—');
+        const rankData   = ranked.map(r => r[deltaField]);
+        const rankColors = ranked.map(r => r[deltaField] >= 0 ? SUCCESS : DANGER);
+
+        const canvas = $(canvasId);
+        if (!canvas) return;
+        const barH = Math.max(28, 300 / Math.max(ranked.length, 1));
+        const canvasH = Math.max(300, ranked.length * barH + 60);
+        canvas.parentElement.style.minHeight = canvasH + 'px';
+
+        charts[chartKey] = new Chart(canvas, {
+            type: 'bar',
+            plugins: [ChartDataLabels],
+            data: {
+                labels: rankLabels,
+                datasets: [{
+                    label,
+                    data: rankData,
+                    backgroundColor: rankColors,
+                    borderColor: rankColors,
+                    borderWidth: 1,
+                    borderRadius: 3,
+                }],
+            },
+            options: {
+                indexAxis: 'y',
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        callbacks: {
+                            label: ctx => ` ${ctx.raw >= 0 ? '+' : ''}${formatEuro(ctx.raw)}`,
+                        },
+                    },
+                    datalabels: {
+                        anchor: ctx => ctx.dataset.data[ctx.dataIndex] >= 0 ? 'end' : 'start',
+                        align: ctx => ctx.dataset.data[ctx.dataIndex] >= 0 ? 'right' : 'left',
+                        formatter: v => `${v >= 0 ? '+' : ''}${formatCompact(v)}`,
+                        font: { family: 'Inter', size: 10, weight: '600' },
+                        color: ctx => ctx.dataset.data[ctx.dataIndex] >= 0 ? '#1a1a1a' : DANGER,
+                    },
+                },
+                scales: {
+                    x: {
+                        ticks: { color: TICK_COLOR, font: { size: 10 }, callback: v => formatEuro(v) },
+                        grid: { color: GRID_COLOR },
+                    },
+                    y: {
+                        ticks: { color: TICK_COLOR, font: { size: 11 } },
+                        grid: { display: false },
+                    },
+                },
+            },
+        });
+    }
+
+    // ── Chart 2: Top Δ VDP per Commessa ──
+    let topNVdp = 15;
+    buildRankChart('#chart-scen-delta-rank', 'scenDeltaRank', rows, 'deltaVdp', 'Δ VDP (B − A)', topNVdp);
+
+    $('#top-n-vdp')?.querySelectorAll('.top-n-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            topNVdp = parseInt(btn.dataset.n);
+            $('#top-n-vdp').querySelectorAll('.top-n-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            buildRankChart('#chart-scen-delta-rank', 'scenDeltaRank', rows, 'deltaVdp', 'Δ VDP (B − A)', topNVdp);
+        });
+    });
+
+    // ── Chart 3: Bridge / Waterfall Margine ──
+    const deltaOI_Mar = (subB['Order Intake']?.marg || 0) - (subA['Order Intake']?.marg || 0);
+    const deltaBL_Mar = (subB['Backlog']?.marg || 0) - (subA['Backlog']?.marg || 0);
+    const marA = grand.margA;
+    const marB = grand.margB;
+
+    const runOI_Mar = marA + deltaOI_Mar;
+    const runBL_Mar = runOI_Mar + deltaBL_Mar;
+
+    const wfDataMar = [
+        [0, marA],
+        [marA, runOI_Mar],
+        [runOI_Mar, runBL_Mar],
+        [0, marB],
+    ];
+    const wfLabelsMar = [_wrapLabel(nameA), ['Δ Order', 'Intake'], 'Δ Backlog', _wrapLabel(nameB)];
+    const wfColorsMar = [
+        ACCENT,
+        deltaOI_Mar >= 0 ? SUCCESS : DANGER,
+        deltaBL_Mar >= 0 ? SUCCESS : DANGER,
+        ACCENT,
+    ];
+
+    const titleElMar = $('#scen-waterfall-mar-title');
+    if (titleElMar) titleElMar.textContent = `Bridge Margine — ${nameA} → ${nameB}`;
+
+    const wfCanvasMar = $('#chart-scen-waterfall-mar');
+    if (wfCanvasMar) {
+        charts.scenWaterfallMar = new Chart(wfCanvasMar, {
+            type: 'bar',
+            data: {
+                labels: wfLabelsMar,
+                datasets: [{
+                    label: 'Margine',
+                    data: wfDataMar,
+                    backgroundColor: wfColorsMar,
+                    borderColor: wfColorsMar,
+                    borderWidth: 1,
+                    borderRadius: 4,
+                }],
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        callbacks: {
+                            label: ctx => {
+                                const d = ctx.raw;
+                                const val = Array.isArray(d) ? d[1] - d[0] : d;
+                                return ` ${val >= 0 ? '+' : ''}${formatEuro(val)}`;
+                            },
+                        },
+                    },
+                    datalabels: {
+                        anchor: ctx => {
+                            const d = ctx.dataset.data[ctx.dataIndex];
+                            const val = Array.isArray(d) ? d[1] - d[0] : d;
+                            return val >= 0 ? 'end' : 'start';
+                        },
+                        align: ctx => {
+                            const d = ctx.dataset.data[ctx.dataIndex];
+                            const val = Array.isArray(d) ? d[1] - d[0] : d;
+                            return val >= 0 ? 'top' : 'bottom';
+                        },
+                        formatter: (_, ctx) => {
+                            const d = ctx.dataset.data[ctx.dataIndex];
+                            const v = Array.isArray(d) ? d[1] - d[0] : d;
+                            return formatEuro(v);
+                        },
+                        color: ctx => {
+                            const d = ctx.dataset.data[ctx.dataIndex];
+                            const v = Array.isArray(d) ? d[1] - d[0] : d;
+                            return v >= 0 ? '#1a1a1a' : DANGER;
+                        },
+                        font: { size: 11, weight: '500' },
+                    },
+                },
+                scales: {
+                    x: {
+                        ticks: { color: TICK_COLOR, font: { size: 11 } },
+                        grid: { color: GRID_COLOR },
+                    },
+                    y: {
+                        ticks: { color: TICK_COLOR, font: { size: 10 }, callback: v => formatEuro(v) },
+                        grid: { color: GRID_COLOR },
+                    },
+                },
+            },
+            plugins: [ChartDataLabels],
+        });
+    }
+
+    // ── Chart 4: Top Δ Margine per Commessa ──
+    let topNMar = 15;
+    buildRankChart('#chart-scen-delta-rank-mar', 'scenDeltaRankMar', rows, 'deltaMar', 'Δ Margine (B − A)', topNMar);
+
+    $('#top-n-mar')?.querySelectorAll('.top-n-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            topNMar = parseInt(btn.dataset.n);
+            $('#top-n-mar').querySelectorAll('.top-n-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            buildRankChart('#chart-scen-delta-rank-mar', 'scenDeltaRankMar', rows, 'deltaMar', 'Δ Margine (B − A)', topNMar);
+        });
+    });
+}
+
 function applyGlobal(type, field, value) {
     if (!activeScenarioId || !appData) return;
     const filtered = appData.commesse.filter(c => c.type === type);
@@ -2174,10 +3959,91 @@ function renderCompareCharts(results) {
         options: commonOpts,
     });
 
-    // Update KPIs with first scenario
-    if (results.length) {
-        renderKPIs(results[0].result.kpis);
-    }
+    // KPI compare row
+    renderCompareKPIs(results, baselineResult.kpis);
+}
+
+function renderCompareKPIs(results, baselineKpis) {
+    const row = $('#kpi-row-compare');
+    const normalRow = $('#kpi-row');
+    if (!row) return;
+
+    // Nascondi riga normale, mostra riga compare
+    normalRow?.classList.add('hidden');
+    row.classList.remove('hidden');
+
+    const fmtMargP = (mar, vdp) => vdp > 0 ? (mar / vdp * 100).toFixed(1) + '%' : '—';
+    const fmtDelta = (v, base) => {
+        if (base === 0) return '—';
+        const perc = (v / base * 100).toFixed(1);
+        const sign = v >= 0 ? '+' : '';
+        return `${sign}${formatEuro(v)} (${sign}${perc}%)`;
+    };
+    const fmtDeltaMargPP = (scenMar, scenVdp, baseMar, baseVdp) => {
+        if (scenVdp <= 0 || baseVdp <= 0) return null;
+        const diff = (scenMar / scenVdp - baseMar / baseVdp) * 100;
+        const sign = diff >= 0 ? '+' : '';
+        return `${sign}${diff.toFixed(1)} pp`;
+    };
+    const deltaClass = v => v >= 0 ? 'delta-pos' : 'delta-neg';
+
+    // Card Baseline
+    const baseVdp = baselineKpis.totalBaseVDP;
+    const baseMar = baselineKpis.totalBaseMar;
+
+    let html = `
+      <div class="kpi-compare-card card-baseline">
+        <div class="kpi-compare-name">Baseline</div>
+        <div class="kpi-compare-row">
+          <span class="kpi-compare-row-label">VDP</span>
+          <span class="kpi-compare-row-val">${formatEuro(baseVdp)}</span>
+        </div>
+        <div class="kpi-compare-row">
+          <span class="kpi-compare-row-label">Margine</span>
+          <span class="kpi-compare-row-val">${formatEuro(baseMar)}</span>
+        </div>
+        <div class="kpi-compare-margp">Marg% ${fmtMargP(baseMar, baseVdp)}</div>
+      </div>`;
+
+    // Card per ogni scenario
+    results.forEach((r, i) => {
+        const kpis = r.result.kpis;
+        const sVdp = kpis.totalScenVDP;
+        const sMar = kpis.totalScenMar;
+        const dVdp = sVdp - baseVdp;
+        const dMar = sMar - baseMar;
+        const dMargPP = fmtDeltaMargPP(sMar, sVdp, baseMar, baseVdp);
+
+        html += `
+          <div class="kpi-compare-card card-scen-${i}">
+            <div class="kpi-compare-name" title="${r.name}">${r.name}</div>
+            <div class="kpi-compare-row">
+              <span class="kpi-compare-row-label">VDP</span>
+              <span class="kpi-compare-row-val">${formatEuro(sVdp)}</span>
+            </div>
+            <div class="kpi-compare-row">
+              <span class="kpi-compare-row-label">Margine</span>
+              <span class="kpi-compare-row-val">${formatEuro(sMar)}</span>
+            </div>
+            <div class="kpi-compare-margp">Marg% ${fmtMargP(sMar, sVdp)}</div>
+            <div class="kpi-compare-deltas">
+              <div class="kpi-compare-delta-item">
+                <span>Δ VDP</span>
+                <span class="${deltaClass(dVdp)}">${fmtDelta(dVdp, baseVdp)}</span>
+              </div>
+              <div class="kpi-compare-delta-item">
+                <span>Δ Margine</span>
+                <span class="${deltaClass(dMar)}">${fmtDelta(dMar, baseMar)}</span>
+              </div>
+              ${dMargPP ? `<div class="kpi-compare-delta-item">
+                <span>Δ Marg%</span>
+                <span class="${deltaClass(parseFloat(dMargPP))}">${dMargPP}</span>
+              </div>` : ''}
+            </div>
+          </div>`;
+    });
+
+    row.innerHTML = html;
 }
 
 // ============================================================
@@ -2207,14 +4073,235 @@ function setupExportEvents() {
         closeModal('export-modal');
     });
 
-    $('#btn-print')?.addEventListener('click', () => {
-        // Switch to dashboard for printing
-        $$('.tab-btn').forEach(b => b.classList.remove('active'));
-        $$('.tab-panel').forEach(p => p.classList.remove('active'));
-        $$('.tab-btn')[0].classList.add('active');
-        $('#tab-dashboard').classList.add('active');
-        setTimeout(() => window.print(), 300);
+    // ── Backup / Restore (selettivo) ──
+    const BACKUP_GROUPS = {
+        scenari:     ['whatif_baseline', 'whatif_scenarios'],
+        risorse:     ['whatif_ruoli', 'whatif_persone', 'whatif_allocazioni', 'whatif_audit'],
+        preferenze:  ['theme', 'appZoomLevel', 'res-cessate-banner-collapsed', 'res-cessate-ignorati-collapsed', 'whatif_supabase_auth', 'whatif_sync_queue', 'whatif_sync_last', 'whatif_deleted_scenarios', 'whatif_deleted_persone', 'whatif_deleted_allocazioni'],
+    };
+
+    $('#btn-backup-export')?.addEventListener('click', () => {
+        const includi = {
+            scenari:    $('#bkp-scenari')?.checked,
+            risorse:    $('#bkp-risorse')?.checked,
+            preferenze: $('#bkp-preferenze')?.checked,
+        };
+        if (!includi.scenari && !includi.risorse && !includi.preferenze) {
+            alert('Seleziona almeno una categoria da esportare.');
+            return;
+        }
+        const keys = [];
+        for (const [group, groupKeys] of Object.entries(BACKUP_GROUPS)) {
+            if (includi[group]) keys.push(...groupKeys);
+        }
+        const backup = {
+            _meta: {
+                version: 2,
+                appName: 'Scenario Whatif',
+                exportedAt: new Date().toISOString(),
+                includes: Object.keys(includi).filter(k => includi[k]),
+            },
+            data: {},
+        };
+        for (const key of keys) {
+            const val = localStorage.getItem(key);
+            if (val !== null) backup.data[key] = val;
+        }
+        const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        const dateStr = new Date().toISOString().slice(0, 10);
+        const suffix = includi.scenari && includi.risorse ? 'completo'
+            : includi.scenari ? 'scenari'
+            : includi.risorse ? 'risorse'
+            : 'preferenze';
+        a.download = `whatif-backup-${suffix}-${dateStr}.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+        closeModal('export-modal');
     });
+
+    $('#btn-backup-import')?.addEventListener('click', () => {
+        $('#backup-file-input')?.click();
+    });
+
+    $('#backup-file-input')?.addEventListener('change', e => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = () => {
+            try {
+                const backup = JSON.parse(reader.result);
+                if (!backup._meta || !backup.data) {
+                    alert('File non valido — non è un backup di Scenario Whatif.');
+                    return;
+                }
+                const exportDate = backup._meta.exportedAt
+                    ? new Date(backup._meta.exportedAt).toLocaleDateString('it-IT', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+                    : 'data sconosciuta';
+
+                // Rileva cosa contiene il backup
+                const hasScenari = BACKUP_GROUPS.scenari.some(k => k in backup.data);
+                const hasRisorse = BACKUP_GROUPS.risorse.some(k => k in backup.data);
+                const hasPreferenze = BACKUP_GROUPS.preferenze.some(k => k in backup.data);
+                const contenuto = [
+                    hasScenari ? 'Scenari (baseline + scenari)' : null,
+                    hasRisorse ? 'Risorse (persone + allocazioni)' : null,
+                    hasPreferenze ? 'Preferenze (tema, zoom)' : null,
+                ].filter(Boolean);
+
+                const msg = `Backup del ${exportDate}\n\nContenuto:\n${contenuto.map(c => `  • ${c}`).join('\n')}\n\nSOLO queste categorie verranno sovrascritte.\nI dati delle altre categorie rimarranno invariati.\n\nProcedere?`;
+                if (!confirm(msg)) return;
+
+                for (const [key, val] of Object.entries(backup.data)) {
+                    localStorage.setItem(key, val);
+                }
+                closeModal('export-modal');
+                alert('Backup ripristinato con successo. L\'applicazione verrà ricaricata.');
+                location.reload();
+            } catch (err) {
+                alert('Errore nella lettura del file: ' + err.message);
+            }
+        };
+        reader.readAsText(file);
+        e.target.value = '';
+    });
+
+    // ── Genera Report ──
+    $('#btn-report')?.addEventListener('click', () => openModal('report-modal'));
+    $('#report-modal-close')?.addEventListener('click', () => closeModal('report-modal'));
+
+    $('#btn-generate-report')?.addEventListener('click', async () => {
+        const sections = {
+            dashboard:      $('#rpt-dashboard')?.checked,
+            scenario:       $('#rpt-scenario')?.checked,
+            economics:      $('#rpt-economics')?.checked,
+            capacity:       $('#rpt-capacity')?.checked,
+            pianificazione: $('#rpt-pianificazione')?.checked,
+            persone:        $('#rpt-persone')?.checked,
+        };
+
+        const useFilters = $('#rpt-use-filters')?.checked;
+        const progressBar = $('#report-progress');
+        const progressFill = $('#report-progress-fill');
+        const progressText = $('#report-progress-text');
+        const btnGenerate = $('#btn-generate-report');
+
+        progressBar.style.display = 'block';
+        btnGenerate.disabled = true;
+        btnGenerate.textContent = 'Generazione in corso...';
+
+        const onProgress = (pct, msg) => {
+            progressFill.style.width = `${pct}%`;
+            progressText.textContent = msg;
+        };
+
+        try {
+            // Scenario data
+            const scenarioData = lastResult || null;
+            const scen = activeScenarioId ? getScenario(activeScenarioId) : null;
+            const scenarioName = scen?.name || 'Baseline';
+
+            // Date range
+            const dateFrom = useFilters ? ($('#filter-date-from')?.value || '') : '';
+            const dateTo = useFilters ? ($('#filter-date-to')?.value || '') : '';
+            const dateRange = { from: dateFrom, to: dateTo };
+            const periodo = dateFrom && dateTo
+                ? `${fmtYMForReport(dateFrom)} → ${fmtYMForReport(dateTo)}`
+                : dateFrom ? `Da ${fmtYMForReport(dateFrom)}`
+                : dateTo ? `Fino a ${fmtYMForReport(dateTo)}`
+                : 'Tutto il periodo';
+
+            // Resource data
+            let resourceData = null;
+            if (sections.economics || sections.capacity || sections.pianificazione || sections.persone) {
+                const persone = listPersone();
+                const commesse = appData?.commesse || [];
+                const scenarioId = activeScenarioId;
+                const allocazioni = listAllocazioni({ scenarioId });
+
+                // Build months from allocations for capacity
+                const monthSet = new Set();
+                for (const a of allocazioni) {
+                    if (!a.dataInizio || !a.dataFine) continue;
+                    let cur = a.dataInizio;
+                    while (cur <= a.dataFine) {
+                        if ((!dateRange.from || cur >= dateRange.from) && (!dateRange.to || cur <= dateRange.to)) {
+                            monthSet.add(cur);
+                        }
+                        const [yy, mm] = cur.split('-').map(Number);
+                        const t = yy * 12 + mm;
+                        cur = `${Math.floor(t / 12)}-${String((t % 12) + 1).padStart(2, '0')}`;
+                    }
+                }
+                // Fill gaps
+                if (monthSet.size > 0) {
+                    const sorted = [...monthSet].sort();
+                    let cur = sorted[0];
+                    const last = sorted[sorted.length - 1];
+                    while (cur < last) {
+                        monthSet.add(cur);
+                        const [yy, mm] = cur.split('-').map(Number);
+                        const t = yy * 12 + mm;
+                        cur = `${Math.floor(t / 12)}-${String((t % 12) + 1).padStart(2, '0')}`;
+                    }
+                }
+                const months = [...monthSet].sort();
+
+                const getEffDates = (codice, sid) => {
+                    if (!appData) return null;
+                    const comm = commesse.find(c => c.codice === codice);
+                    if (!comm) return null;
+                    const resolvedId = sid !== undefined ? sid : activeScenarioId;
+                    const s = resolvedId ? getScenario(resolvedId) : null;
+                    const result = computeScenario([comm], appData.monthlyData, s || {}, {});
+                    const cr = result?.commessaResults?.[0];
+                    const withVdp = (cr?.scenarioMonths || []).filter(m => (m.vdp || 0) !== 0).map(m => m.month).sort();
+                    if (!withVdp.length) return null;
+                    return { dataInizio: withVdp[0], dataFine: withVdp[withVdp.length - 1] };
+                };
+
+                const matrix = computeResourceMatrix(scenarioId, commesse, months, getEffDates);
+                const kpis = computeResourceKpis(matrix, months);
+
+                resourceData = { persone, allocazioni, commesse, matrix, months, kpis, dateRange, getEffectiveDates: getEffDates };
+            }
+
+            await generateReport({
+                scenarioData,
+                resourceData,
+                scenarioName,
+                periodo,
+                sections,
+                onProgress,
+            });
+
+            // Chiudi modal dopo generazione riuscita
+            setTimeout(() => {
+                closeModal('report-modal');
+                progressBar.style.display = 'none';
+                progressFill.style.width = '0%';
+                btnGenerate.disabled = false;
+                btnGenerate.textContent = 'Genera PDF';
+            }, 800);
+
+        } catch (err) {
+            console.error('Report generation error:', err);
+            alert('Errore nella generazione del report: ' + err.message);
+            btnGenerate.disabled = false;
+            btnGenerate.textContent = 'Genera PDF';
+            progressBar.style.display = 'none';
+            progressFill.style.width = '0%';
+        }
+    });
+}
+
+function fmtYMForReport(ym) {
+    if (!ym) return '';
+    const [y, m] = ym.split('-');
+    const mesi = ['Gen','Feb','Mar','Apr','Mag','Giu','Lug','Ago','Set','Ott','Nov','Dic'];
+    return `${mesi[parseInt(m)-1]} ${y}`;
 }
 
 // ============================================================
@@ -2300,20 +4387,508 @@ function setupZoomControls() {
 }
 
 // ============================================================
+//  CHART DOWNLOAD BUTTONS
+// ============================================================
+function setupChartDownloads() {
+    document.addEventListener('click', (e) => {
+        const btn = e.target.closest('.chart-download-btn');
+        if (!btn) return;
+        const chart = btn.dataset.chart;
+        if (chart === 'scen-compare-table') { exportScenCompareTable(); return; }
+        if (!lastResult) return;
+        buildAndExportChart(chart);
+    });
+}
+
+function exportScenCompareTable() {
+    if (!appData) return;
+
+    const scenAId = $('#compare-scen-a')?.value;
+    const scenBId = $('#compare-scen-b')?.value;
+    const scenA = (scenAId && scenAId !== '__baseline__') ? getScenario(scenAId) : null;
+    const scenB = (scenBId && scenBId !== '__baseline__') ? getScenario(scenBId) : null;
+    const nameA = scenA ? scenA.name : 'Baseline';
+    const nameB = scenB ? scenB.name : 'Baseline';
+
+    const filters = getActiveFilters();
+    const newComA = scenA?.newCommesse || [];
+    const newComB = scenB?.newCommesse || [];
+    const extraKeys = new Set(newComA.map(c => c.key));
+    const mergedNew = [...newComA];
+    for (const c of newComB) { if (!extraKeys.has(c.key)) mergedNew.push(c); }
+    const commesseForCalc = mergedNew.length ? [...appData.commesse, ...mergedNew] : appData.commesse;
+
+    const resultA = computeScenario(commesseForCalc, appData.monthlyData, scenA || {}, filters);
+    const resultB = computeScenario(commesseForCalc, appData.monthlyData, scenB || {}, filters);
+
+    const mapA = new Map(resultA.commessaResults.map(c => [c.key, c]));
+    const mapB = new Map(resultB.commessaResults.map(c => [c.key, c]));
+    const allKeys = new Set([...mapA.keys(), ...mapB.keys()]);
+
+    const rows = [];
+    for (const key of allKeys) {
+        const ca = mapA.get(key);
+        const cb = mapB.get(key);
+        const comm = ca || cb;
+        rows.push({
+            key,
+            codice:      comm.codice || '—',
+            nome:        comm.nome   || '—',
+            typeA:       ca?.effectiveType || '—',
+            typeB:       cb?.effectiveType || '—',
+            probA:       ca?.effectiveProbabilita ?? null,
+            probB:       cb?.effectiveProbabilita ?? null,
+            margPercA:   ca?.effectiveMargine ?? null,
+            margPercB:   cb?.effectiveMargine ?? null,
+            vdpA:        ca?.scenVdpTot || 0,
+            vdpB:        cb?.scenVdpTot || 0,
+            margA:       ca?.scenMarTot || 0,
+            margB:       cb?.scenMarTot || 0,
+            deltaVdp:   (cb?.scenVdpTot || 0) - (ca?.scenVdpTot || 0),
+            deltaMar:   (cb?.scenMarTot || 0) - (ca?.scenMarTot || 0),
+            originalType: comm.type || 'Altro',
+        });
+    }
+
+    // Apply same sort as the table
+    const sortKey = scenCompareSortCol;
+    const sortDir = scenCompareSortDir === 'asc' ? 1 : -1;
+    if (sortKey) {
+        rows.sort((a, b) => {
+            let va = a[sortKey], vb = b[sortKey];
+            if (va == null) va = sortDir === 1 ? Infinity : -Infinity;
+            if (vb == null) vb = sortDir === 1 ? Infinity : -Infinity;
+            if (typeof va === 'string') return va.localeCompare(vb) * sortDir;
+            return (va - vb) * sortDir;
+        });
+    } else {
+        rows.sort((a, b) => (a.codice || '').localeCompare(b.codice || ''));
+    }
+
+    // Subtotals per tipo effettivo di ciascuno scenario + grand total
+    const subA = {};
+    const subB = {};
+    const grand = { vdpA: 0, vdpB: 0, margA: 0, margB: 0, deltaVdp: 0, deltaMar: 0 };
+    for (const r of rows) {
+        const tA = r.typeA || 'Altro'; const tB = r.typeB || 'Altro';
+        if (!subA[tA]) subA[tA] = { vdp: 0, marg: 0 };
+        if (!subB[tB]) subB[tB] = { vdp: 0, marg: 0 };
+        subA[tA].vdp  += r.vdpA;  subA[tA].marg += r.margA;
+        subB[tB].vdp  += r.vdpB;  subB[tB].marg += r.margB;
+        grand.vdpA += r.vdpA; grand.vdpB += r.vdpB;
+        grand.margA += r.margA; grand.margB += r.margB;
+        grand.deltaVdp += r.deltaVdp; grand.deltaMar += r.deltaMar;
+    }
+
+    const fmtP = v => (v != null ? +(v * 100).toFixed(1) : null);
+    const colVdpA   = `VDP ${nameA}`;
+    const colVdpB   = `VDP ${nameB}`;
+    const colMargA  = `Marg% ${nameA}`;
+    const colMargB  = `Marg% ${nameB}`;
+
+    const exRows = rows.map(r => ({
+        'Codice':           r.codice,
+        'Commessa':         r.nome,
+        [`Tipo ${nameA}`]:  r.typeA,
+        [`Tipo ${nameB}`]:  r.typeB,
+        [`Prob% ${nameA}`]: fmtP(r.probA),
+        [`Prob% ${nameB}`]: fmtP(r.probB),
+        [colVdpA]:          Math.round(r.vdpA),
+        [colVdpB]:          Math.round(r.vdpB),
+        'Δ VDP':            Math.round(r.deltaVdp),
+        [colMargA]:         fmtP(r.margPercA),
+        [colMargB]:         fmtP(r.margPercB),
+        'Δ Margine (€)':    Math.round(r.deltaMar),
+        'Tipo originale':   r.originalType,
+    }));
+
+    // Footer rows con aggregazione per tipo effettivo di ciascuno scenario
+    for (const t of ['Order Intake', 'Backlog']) {
+        const sA = subA[t]; const sB = subB[t];
+        if (!sA && !sB) continue;
+        const vdpA = sA?.vdp || 0; const vdpB = sB?.vdp || 0;
+        exRows.push({
+            'Codice': '',
+            'Commessa': `TOTALE ${t}`,
+            [colVdpA]:       Math.round(vdpA),
+            [colVdpB]:       Math.round(vdpB),
+            'Δ VDP':         Math.round(vdpB - vdpA),
+            'Δ Margine (€)': Math.round((sB?.marg || 0) - (sA?.marg || 0)),
+        });
+    }
+    exRows.push({
+        'Codice': '',
+        'Commessa': 'TOTALE GENERALE',
+        [colVdpA]:       Math.round(grand.vdpA),
+        [colVdpB]:       Math.round(grand.vdpB),
+        'Δ VDP':         Math.round(grand.deltaVdp),
+        'Δ Margine (€)': Math.round(grand.deltaMar),
+    });
+
+    const filename = `Comparison_${nameA}_vs_${nameB}`.replace(/[^a-zA-Z0-9_\-]/g, '_');
+    exportChartToExcel(filename, exRows);
+}
+
+function buildAndExportChart(chart) {
+    const { monthly, commessaResults } = lastResult;
+
+    // ── Dashboard ──────────────────────────────────────────────
+    if (chart === 'vdp-monthly') {
+        const rows = monthly.map(m => ({
+            'Mese':               m.month,
+            'Baseline (AOP)':     Math.round(m.baselineVDP),
+            'Scenario (Actual)':  Math.round(m.scenarioActual),
+            'Scenario (Remaining)': Math.round(m.scenarioRemaining),
+            'Scenario (Totale)':  Math.round(m.scenarioVDP),
+        }));
+        exportChartToExcel('VDP_Mensile', rows);
+        return;
+    }
+
+    if (chart === 'vdp-cumulative') {
+        let cumBase = 0, cumActual = 0, cumTotal = 0;
+        const rows = monthly.map(m => {
+            cumBase   += m.baselineVDP;
+            cumActual += m.scenarioActual;
+            cumTotal  += m.scenarioVDP;
+            return {
+                'Mese':                    m.month,
+                'Cumulato Baseline (AOP)': Math.round(cumBase),
+                'Cumulato Scenario (Actual)': Math.round(cumActual),
+                'Cumulato Scenario (Total)':  Math.round(cumTotal),
+            };
+        });
+        exportChartToExcel('VDP_Cumulato', rows);
+        return;
+    }
+
+    if (chart === 'margin-monthly') {
+        const rows = monthly.map(m => ({
+            'Mese':              m.month,
+            'Margine Baseline':  Math.round(m.baselineMargine),
+            'Margine Scenario':  Math.round(m.scenarioMargine),
+            'Delta Margine':     Math.round(m.scenarioMargine - m.baselineMargine),
+        }));
+        exportChartToExcel('Margine_Mensile', rows);
+        return;
+    }
+
+    if (chart === 'margin-cumulative') {
+        let cumBase = 0, cumScen = 0;
+        const rows = monthly.map(m => {
+            cumBase += m.baselineMargine;
+            cumScen += m.scenarioMargine;
+            return {
+                'Mese':                      m.month,
+                'Cumulato Margine Baseline': Math.round(cumBase),
+                'Cumulato Margine Scenario': Math.round(cumScen),
+                'Delta Cumulato':            Math.round(cumScen - cumBase),
+            };
+        });
+        exportChartToExcel('Margine_Cumulato', rows);
+        return;
+    }
+
+    // ── Details Commessa ───────────────────────────────────────
+    if (chart === 'details-vdp') {
+        const rows = [];
+        for (const comm of commessaResults) {
+            for (const sm of (comm.scenarioMonths || [])) {
+                if (!sm.vdp && !sm.margine) continue;
+                rows.push({
+                    'Mese':     sm.month,
+                    'Codice':   comm.codice,
+                    'Commessa': comm.nome,
+                    'Settore':  comm.settore,
+                    'Type':     comm.effectiveType || comm.type,
+                    'VDP Scenario': Math.round(sm.vdp || 0),
+                });
+            }
+        }
+        exportChartToExcel('Details_VDP_per_Commessa', rows);
+        return;
+    }
+
+    if (chart === 'details-mar') {
+        const rows = [];
+        for (const comm of commessaResults) {
+            for (const sm of (comm.scenarioMonths || [])) {
+                if (!sm.vdp && !sm.margine) continue;
+                rows.push({
+                    'Mese':     sm.month,
+                    'Codice':   comm.codice,
+                    'Commessa': comm.nome,
+                    'Settore':  comm.settore,
+                    'Type':     comm.effectiveType || comm.type,
+                    'Margine Scenario': Math.round(sm.margine || 0),
+                });
+            }
+        }
+        exportChartToExcel('Details_Margine_per_Commessa', rows);
+        return;
+    }
+
+    // ── Details Type ───────────────────────────────────────────
+    if (chart === 'details-type-vdp') {
+        const byTypeMonth = {};
+        for (const comm of commessaResults) {
+            const type = comm.effectiveType || comm.type || 'Backlog';
+            for (const sm of (comm.scenarioMonths || [])) {
+                const k = `${sm.month}|||${type}`;
+                byTypeMonth[k] = (byTypeMonth[k] || 0) + (sm.vdp || 0);
+            }
+        }
+        const rows = Object.entries(byTypeMonth)
+            .map(([k, v]) => { const [mese, type] = k.split('|||'); return { 'Mese': mese, 'Type': type, 'VDP Scenario': Math.round(v) }; })
+            .sort((a, b) => a['Mese'].localeCompare(b['Mese']) || a['Type'].localeCompare(b['Type']));
+        exportChartToExcel('Details_Type_VDP', rows);
+        return;
+    }
+
+    if (chart === 'details-type-mar') {
+        const byTypeMonth = {};
+        for (const comm of commessaResults) {
+            const type = comm.effectiveType || comm.type || 'Backlog';
+            for (const sm of (comm.scenarioMonths || [])) {
+                const k = `${sm.month}|||${type}`;
+                byTypeMonth[k] = (byTypeMonth[k] || 0) + (sm.margine || 0);
+            }
+        }
+        const rows = Object.entries(byTypeMonth)
+            .map(([k, v]) => { const [mese, type] = k.split('|||'); return { 'Mese': mese, 'Type': type, 'Margine Scenario': Math.round(v) }; })
+            .sort((a, b) => a['Mese'].localeCompare(b['Mese']) || a['Type'].localeCompare(b['Type']));
+        exportChartToExcel('Details_Type_Margine', rows);
+        return;
+    }
+
+    // ── Comparison Annualità ───────────────────────────────────
+    if (chart === 'vdp-yearly') {
+        const yearBaseVdp = {}, yearScenVdp = {};
+        for (const m of monthly) {
+            const y = m.month.substring(0, 4);
+            yearBaseVdp[y] = (yearBaseVdp[y] || 0) + m.baselineVDP;
+            yearScenVdp[y] = (yearScenVdp[y] || 0) + m.scenarioVDP;
+        }
+        const years = [...new Set([...Object.keys(yearBaseVdp), ...Object.keys(yearScenVdp)])].sort();
+        const rows = years.map(y => ({
+            'Anno':           y,
+            'VDP Baseline':   Math.round(yearBaseVdp[y] || 0),
+            'VDP Scenario':   Math.round(yearScenVdp[y] || 0),
+            'Delta VDP':      Math.round((yearScenVdp[y] || 0) - (yearBaseVdp[y] || 0)),
+        }));
+        exportChartToExcel('VDP_per_Anno', rows);
+        return;
+    }
+
+    if (chart === 'margin-yearly') {
+        const yearBaseMar = {}, yearScenMar = {};
+        for (const m of monthly) {
+            const y = m.month.substring(0, 4);
+            yearBaseMar[y] = (yearBaseMar[y] || 0) + m.baselineMargine;
+            yearScenMar[y] = (yearScenMar[y] || 0) + m.scenarioMargine;
+        }
+        const years = [...new Set([...Object.keys(yearBaseMar), ...Object.keys(yearScenMar)])].sort();
+        const rows = years.map(y => ({
+            'Anno':              y,
+            'Margine Baseline':  Math.round(yearBaseMar[y] || 0),
+            'Margine Scenario':  Math.round(yearScenMar[y] || 0),
+            'Delta Margine':     Math.round((yearScenMar[y] || 0) - (yearBaseMar[y] || 0)),
+        }));
+        exportChartToExcel('Margine_per_Anno', rows);
+        return;
+    }
+
+    if (chart === 'vdp-type') {
+        const yearTypeVdp = {};
+        for (const comm of commessaResults) {
+            const type = comm.effectiveType || comm.type || 'Altro';
+            for (const sm of (comm.scenarioMonths || [])) {
+                const y = sm.month.substring(0, 4);
+                if (!yearTypeVdp[y]) yearTypeVdp[y] = {};
+                yearTypeVdp[y][type] = (yearTypeVdp[y][type] || 0) + (sm.actual || 0) + (sm.remaining || 0);
+            }
+        }
+        const years = [...new Set(Object.keys(yearTypeVdp))].sort();
+        const types = [...new Set(commessaResults.map(c => c.effectiveType || c.type || 'Altro'))].sort();
+        const rows = years.flatMap(y => types.map(t => ({
+            'Anno': y, 'Type': t, 'VDP Scenario': Math.round((yearTypeVdp[y] || {})[t] || 0),
+        })));
+        exportChartToExcel('VDP_Scenario_per_Tipo_Anno', rows);
+        return;
+    }
+
+    if (chart === 'margin-type') {
+        const yearTypeMar = {};
+        for (const comm of commessaResults) {
+            const type = comm.effectiveType || comm.type || 'Altro';
+            for (const sm of (comm.scenarioMonths || [])) {
+                const y = sm.month.substring(0, 4);
+                if (!yearTypeMar[y]) yearTypeMar[y] = {};
+                yearTypeMar[y][type] = (yearTypeMar[y][type] || 0) + (sm.margine || 0);
+            }
+        }
+        const years = [...new Set(Object.keys(yearTypeMar))].sort();
+        const types = [...new Set(commessaResults.map(c => c.effectiveType || c.type || 'Altro'))].sort();
+        const rows = years.flatMap(y => types.map(t => ({
+            'Anno': y, 'Type': t, 'Margine Scenario': Math.round((yearTypeMar[y] || {})[t] || 0),
+        })));
+        exportChartToExcel('Margine_Scenario_per_Tipo_Anno', rows);
+        return;
+    }
+
+    if (chart === 'waterfall-vdp') {
+        const sorted = [...commessaResults].sort((a, b) => b.deltaVdp - a.deltaVdp);
+        const rows = [
+            { 'Label': 'Baseline', 'VDP Baseline': Math.round(commessaResults.reduce((s, c) => s + c.baseVdpTot, 0)), 'VDP Scenario': '', 'Delta VDP': '' },
+            ...sorted.map(c => ({
+                'Label': `${c.codice} · ${c.nome}`,
+                'VDP Baseline': Math.round(c.baseVdpTot),
+                'VDP Scenario': Math.round(c.scenVdpTot),
+                'Delta VDP': Math.round(c.deltaVdp),
+            })),
+            { 'Label': 'Scenario', 'VDP Baseline': '', 'VDP Scenario': Math.round(commessaResults.reduce((s, c) => s + c.scenVdpTot, 0)), 'Delta VDP': '' },
+        ];
+        exportChartToExcel('Waterfall_VDP_per_Commessa', rows);
+        return;
+    }
+
+    if (chart === 'waterfall-mar') {
+        const sorted = [...commessaResults].sort((a, b) => b.deltaMar - a.deltaMar);
+        const rows = [
+            { 'Label': 'Baseline', 'Margine Baseline': Math.round(commessaResults.reduce((s, c) => s + c.baseMarTot, 0)), 'Margine Scenario': '', 'Delta Margine': '' },
+            ...sorted.map(c => ({
+                'Label': `${c.codice} · ${c.nome}`,
+                'Margine Baseline': Math.round(c.baseMarTot),
+                'Margine Scenario': Math.round(c.scenMarTot),
+                'Delta Margine': Math.round(c.deltaMar),
+            })),
+            { 'Label': 'Scenario', 'Margine Baseline': '', 'Margine Scenario': Math.round(commessaResults.reduce((s, c) => s + c.scenMarTot, 0)), 'Delta Margine': '' },
+        ];
+        exportChartToExcel('Waterfall_Margine_per_Commessa', rows);
+        return;
+    }
+
+    // ── Type & Settore ─────────────────────────────────────────
+    if (chart === 'type-comparison') {
+        const types = [...new Set(['Backlog', 'Order Intake', ...commessaResults.map(c => c.effectiveType || c.type)])];
+        const baseByType = {}, scenByType = {};
+        for (const comm of commessaResults) {
+            const bt = comm.type || 'Altro';
+            const st = comm.effectiveType || comm.type || 'Altro';
+            baseByType[bt] = (baseByType[bt] || 0) + comm.baseVdpTot;
+            scenByType[st] = (scenByType[st] || 0) + comm.scenVdpTot;
+        }
+        const rows = types.map(t => ({
+            'Type':          t,
+            'VDP Baseline':  Math.round(baseByType[t] || 0),
+            'VDP Scenario':  Math.round(scenByType[t] || 0),
+            'Delta VDP':     Math.round((scenByType[t] || 0) - (baseByType[t] || 0)),
+        }));
+        exportChartToExcel('VDP_per_Tipo_Baseline_vs_Scenario', rows);
+        return;
+    }
+
+    if (chart === 'type-changes') {
+        const rows = commessaResults
+            .filter(c => (c.effectiveType || c.type) !== c.type)
+            .map(c => ({
+                'Codice':        c.codice,
+                'Commessa':      c.nome,
+                'Settore':       c.settore,
+                'Type Baseline': c.type,
+                'Type Scenario': c.effectiveType || c.type,
+                'VDP Scenario':  Math.round(c.scenVdpTot),
+            }));
+        exportChartToExcel('Commesse_Cambio_Type', rows);
+        return;
+    }
+
+    if (chart === 'settore-type') {
+        const settori = [...new Set(commessaResults.map(c => c.settore || '?'))].sort();
+        const types   = [...new Set(commessaResults.map(c => c.effectiveType || c.type || 'Altro'))].sort();
+        const settoreTypeVdp = {};
+        for (const comm of commessaResults) {
+            const s = comm.settore || '?';
+            const t = comm.effectiveType || comm.type || 'Altro';
+            if (!settoreTypeVdp[s]) settoreTypeVdp[s] = {};
+            settoreTypeVdp[s][t] = (settoreTypeVdp[s][t] || 0) + comm.scenVdpTot;
+        }
+        const rows = settori.flatMap(s => types.map(t => ({
+            'Settore': s, 'Type': t, 'VDP Scenario': Math.round((settoreTypeVdp[s] || {})[t] || 0),
+        })));
+        exportChartToExcel('VDP_per_Settore_Type', rows);
+        return;
+    }
+
+    if (chart === 'settore-pie') {
+        const settoreVdp = {};
+        for (const comm of commessaResults) {
+            const s = comm.settore || '?';
+            settoreVdp[s] = (settoreVdp[s] || 0) + comm.scenVdpTot;
+        }
+        const total = Object.values(settoreVdp).reduce((a, b) => a + b, 0);
+        const rows = Object.keys(settoreVdp).sort().map(s => ({
+            'Settore':       s,
+            'VDP Scenario':  Math.round(settoreVdp[s]),
+            '% sul Totale':  total > 0 ? parseFloat((settoreVdp[s] / total * 100).toFixed(2)) : 0,
+        }));
+        exportChartToExcel('VDP_per_Settore', rows);
+        return;
+    }
+
+    // ── Scostamenti per Commessa ───────────────────────────────
+    if (chart === 'delta-vdp') {
+        const rows = commessaResults
+            .filter(c => c.deltaVdp !== 0 || c.baseVdpTot !== 0 || c.scenVdpTot !== 0)
+            .sort((a, b) => b.deltaVdp - a.deltaVdp)
+            .map(c => ({
+                'Codice':          c.codice,
+                'Commessa':        c.nome,
+                'Settore':         c.settore,
+                'Type':            c.effectiveType || c.type,
+                'VDP Baseline':    Math.round(c.baseVdpTot),
+                'VDP Scenario':    Math.round(c.scenVdpTot),
+                'Delta VDP':       Math.round(c.deltaVdp),
+            }));
+        exportChartToExcel('Delta_VDP_per_Commessa', rows);
+        return;
+    }
+
+    if (chart === 'delta-mar') {
+        const rows = commessaResults
+            .filter(c => c.deltaMar !== 0 || c.baseMarTot !== 0 || c.scenMarTot !== 0)
+            .sort((a, b) => b.deltaMar - a.deltaMar)
+            .map(c => ({
+                'Codice':              c.codice,
+                'Commessa':            c.nome,
+                'Settore':             c.settore,
+                'Type':                c.effectiveType || c.type,
+                'Margine Baseline':    Math.round(c.baseMarTot),
+                'Margine Scenario':    Math.round(c.scenMarTot),
+                'Delta Margine':       Math.round(c.deltaMar),
+            }));
+        exportChartToExcel('Delta_Margine_per_Commessa', rows);
+        return;
+    }
+}
+
+// ============================================================
 //  AUTO-UPDATER BANNER
 // ============================================================
 function setupUpdateBanner() {
     if (!window.updaterAPI) return;
 
-    const banner      = $('#update-banner');
-    const bannerText  = $('#update-banner-text');
+    const banner       = $('#update-banner');
+    const bannerLabel  = $('#update-banner-label');
+    const bannerText   = $('#update-banner-text');
     const progressWrap = $('#update-progress-wrap');
     const progressFill = $('#update-progress-fill');
     const progressPct  = $('#update-progress-pct');
-    const actions     = $('#update-actions');
+    const actions      = $('#update-actions');
 
     window.updaterAPI.onStart((version) => {
-        bannerText.textContent = `Scaricamento aggiornamento v${version}...`;
+        bannerLabel.textContent = 'La tua app si sta aggiornando';
+        bannerText.textContent  = `Scaricamento v${version}...`;
         progressFill.style.width = '0%';
         progressPct.textContent = '0%';
         progressWrap.classList.remove('hidden');
@@ -2322,7 +4897,8 @@ function setupUpdateBanner() {
     });
 
     window.updaterAPI.onProgress((percent) => {
-        bannerText.textContent = 'Scaricamento aggiornamento in corso...';
+        bannerLabel.textContent = 'La tua app si sta aggiornando';
+        bannerText.textContent  = `Scaricamento in corso, potrebbe richiedere qualche minuto...`;
         progressFill.style.width = `${percent}%`;
         progressPct.textContent = `${percent}%`;
         progressWrap.classList.remove('hidden');
@@ -2331,14 +4907,32 @@ function setupUpdateBanner() {
     });
 
     window.updaterAPI.onReady(() => {
-        bannerText.textContent = 'Aggiornamento pronto! Riavvia l\'app per installarlo.';
+        bannerLabel.textContent = 'Aggiornamento pronto!';
+        bannerText.textContent  = 'Clicca "Installa e riavvia" quando sei pronto (richiede ~2 minuti).';
         progressWrap.classList.add('hidden');
         actions.classList.remove('hidden');
         banner.classList.remove('hidden');
     });
 
+    window.updaterAPI.onError?.((msg) => {
+        bannerLabel.textContent = 'Errore aggiornamento';
+        bannerText.textContent  = msg || 'Si è verificato un errore. Riavvia l\'app per riprovare.';
+        progressWrap.classList.add('hidden');
+        actions.classList.add('hidden');
+        banner.classList.remove('hidden');
+    });
+
     $('#btn-update-install')?.addEventListener('click', () => {
+        openModal('update-confirm-modal');
+    });
+
+    $('#btn-update-confirm-ok')?.addEventListener('click', () => {
+        closeModal('update-confirm-modal');
         window.updaterAPI.install();
+    });
+
+    $('#btn-update-confirm-cancel')?.addEventListener('click', () => {
+        closeModal('update-confirm-modal');
     });
 
     $('#btn-update-later')?.addEventListener('click', () => {

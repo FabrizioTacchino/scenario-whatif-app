@@ -243,12 +243,25 @@ export function computeScenario(commesse, monthlyData, scenario = {}, filters = 
                 margPerc = Number(inputs.margine) / 100;
             }
 
-            // Per scenari importati il VDP del file è già calcolato alla probabilità
-            // del file stesso — non va riscalato rispetto alla probabilità AOP.
-            // probScale resta sempre 1: inputs.probabilita serve solo per la visualizzazione
-            // nella tabella Assunzioni, non per scalare i valori.
-            const probScale = 1;
+            // Per scenari importati il VDP del file è già alla probabilità del file (probabilitaFile).
+            // Se l'utente imposta una probabilità diversa (inputs.probabilita), riscaliamo:
+            //   probScale = nuovaProbabilità / probFile
+            // Se l'utente non ha cambiato niente, inputs.probabilita == probabilitaFile → probScale = 1.
+            // Se probabilitaFile non è disponibile (scenario manuale/vecchio), usiamo probAOP come riferimento.
             const isOI = comm.type === 'Order Intake';
+            let probScale = 1;
+            if (isOI) {
+                // Probabilità effettiva da applicare: override utente oppure fallback su probabilitaAOP
+                // (stesso comportamento degli scenari calcolati).
+                const newProb = inputs.probabilita != null && inputs.probabilita !== ''
+                    ? Number(inputs.probabilita) / 100
+                    : (comm.probabilitaAOP ?? 1);
+                // Probabilità con cui i dati del file sono stati costruiti.
+                const fileProb = inputs.probabilitaFile != null
+                    ? Number(inputs.probabilitaFile) / 100
+                    : (comm.probabilitaAOP > 0 ? comm.probabilitaAOP : 1);
+                probScale = fileProb > 0 ? newProb / fileProb : newProb;
+            }
             const shift = inputs.shiftStart || 0;
             const ritardo = inputs.ritardo || 0;
             const intensity = (inputs.smussamento != null && inputs.smussamento !== '') ? Number(inputs.smussamento) / 100 : 0.5;

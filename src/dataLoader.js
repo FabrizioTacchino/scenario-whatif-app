@@ -145,9 +145,13 @@ export function parseExcel(arrayBuffer) {
     const silActual = row.silActual != null ? Number(row.silActual) : 0;
     const silRemaining = row.silRemaining != null ? Number(row.silRemaining) : 0;
 
-    // Fallback: if vdpAOP is 0 but we have actual/remaining, use their sum as baseline
+    // Fallback: if vdpAOP is 0 but we have actual/remaining, use their sum weighted by probability.
+    // New file format: VDP Remaining is the 100% unweighted value → multiply by probabilitaAOP.
+    // Old file format: VDP da AOP was already weighted → fallback only triggers when that column
+    //   is absent or 0, so multiplying by probability is also correct in that edge case.
     if (vdpAOP === 0 && (silActual !== 0 || silRemaining !== 0)) {
-      vdpAOP = silActual + silRemaining;
+      const prob = commessa.probabilitaAOP != null ? commessa.probabilitaAOP : 1;
+      vdpAOP = (silActual + silRemaining) * prob;
     }
 
     const margPerc = row.margineAOP != null ? Number(row.margineAOP) : null;
@@ -212,8 +216,14 @@ export function parseImportedScenario(arrayBuffer) {
     if (mapped) headerMap[rh] = mapped;
   }
 
+  // Rileva il formato del file:
+  // - Nuovo formato ("VDP Remaining"): la curva è al 100% → va pesata per la probabilità
+  // - Vecchio formato ("SIL Remaining" / "VDP da AOP"): la curva è già pesata
+  const fileIsUnweighted = rawHeaders.some(h => h.toLowerCase().trim() === 'vdp remaining');
+
   const result = {};
   const typeFromFile = {};
+  const settoreFromFile = {};
   const inputOverrides = {}; // { key: { probabilita, margine } } — valori in % (0-100)
 
   for (const raw of rawRows) {
@@ -233,9 +243,12 @@ export function parseImportedScenario(arrayBuffer) {
     const actual = row.silActual != null ? Number(row.silActual) : 0;
     const remaining = row.silRemaining != null ? Number(row.silRemaining) : 0;
 
-    // Capture first non-empty type value per commessa key
+    // Capture first non-empty type e settore per commessa key
     if (!typeFromFile[key] && row.type) {
       typeFromFile[key] = String(row.type).trim();
+    }
+    if (!settoreFromFile[key] && row.settore) {
+      settoreFromFile[key] = String(row.settore).trim();
     }
 
     // Capture WhatIf probability and margin overrides (prima riga valida per commessa).
@@ -262,7 +275,7 @@ export function parseImportedScenario(arrayBuffer) {
     result[key].push({ month, actual, remaining });
   }
 
-  return { monthlyData: result, typeFromFile, inputOverrides };
+  return { monthlyData: result, typeFromFile, settoreFromFile, inputOverrides, fileIsUnweighted };
 }
 
 
