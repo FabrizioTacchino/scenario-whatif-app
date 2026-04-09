@@ -61,6 +61,29 @@ window.alert = (msg) => { _nativeAlert(msg); _restoreFocus(); };
 
 // ─── Init ───
 document.addEventListener('DOMContentLoaded', async () => {
+    // One-time cleanup: remove duplicate allocazioni from localStorage
+    try {
+        const _raw = localStorage.getItem('whatif_allocazioni');
+        if (_raw) {
+            const _alloc = JSON.parse(_raw);
+            const _seen = new Map();
+            for (const a of _alloc) {
+                const k = `${a.personaId}|${a.codiceCommessa}|${a.scenarioId}|${a.dataInizio}|${a.dataFine}|${a.percentuale}`;
+                if (_seen.has(k)) {
+                    const prev = _seen.get(k);
+                    if ((a.updatedAt || '') > (prev.updatedAt || '')) _seen.set(k, a);
+                } else {
+                    _seen.set(k, a);
+                }
+            }
+            const _cleaned = [..._seen.values()];
+            if (_cleaned.length < _alloc.length) {
+                console.warn(`[Startup] Rimossi ${_alloc.length - _cleaned.length} allocazioni duplicate`);
+                localStorage.setItem('whatif_allocazioni', JSON.stringify(_cleaned));
+            }
+        }
+    } catch (e) { console.warn('[Startup] Dedup error:', e); }
+
     initTheme();
     setupFileUpload();
     setupUpdateImport();
