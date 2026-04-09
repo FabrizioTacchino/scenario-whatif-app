@@ -2011,39 +2011,6 @@ function _renderCapacity() {
             </div>` : ''}
         </div>` : ''}
 
-        ${(() => {
-            const oggi = new Date().toISOString().slice(0, 7);
-            const pianificate = persone.filter(p => p.dataAssunzione?.slice(0, 7) > oggi && (p.statoAssunzione === 'in_ingresso' || p.statoAssunzione === 'da_ricercare'));
-            if (!pianificate.length) return '';
-            pianificate.sort((a, b) => (a.dataAssunzione || '').localeCompare(b.dataAssunzione || ''));
-            return `
-            <div class="res-disp-section" style="margin-bottom:12px;">
-                <div class="res-disp-header">
-                    <h4>Piano Assunzioni</h4>
-                    <span class="text-muted" style="font-size:.78rem;">${pianificate.length} ${pianificate.length === 1 ? 'posizione' : 'posizioni'}</span>
-                </div>
-                <div class="res-disp-body">
-                    <div class="table-container">
-                        <table class="res-table">
-                            <thead><tr>
-                                <th>Persona</th><th>Ruolo</th><th>BU</th><th>Stato</th><th>Assunzione</th><th class="col-num">Costo/Mese</th>
-                            </tr></thead>
-                            <tbody>${pianificate.map(p => `
-                                <tr>
-                                    <td><div class="res-person-name">${p.cognome} ${p.nome}</div></td>
-                                    <td>${p.ruolo || '—'}</td>
-                                    <td>${p.bu || '—'}</td>
-                                    <td>${p.statoAssunzione === 'in_ingresso' ? '<span class="res-badge-ingresso">In ingresso</span>' : '<span class="res-badge-ricerca">Da ricercare</span>'}</td>
-                                    <td>${formatYM(p.dataAssunzione?.slice(0, 7))}</td>
-                                    <td class="col-num">${p.costoMedioMese ? formatEuro(p.costoMedioMese) : '—'}</td>
-                                </tr>`).join('')}
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
-            </div>`;
-        })()}
-
         <!-- Grafici costi mensili (Chart.js) -->
         <div class="res-capacity-section">
             <h4>Costo Personale per mese — Totale</h4>
@@ -2121,6 +2088,38 @@ function _renderCapacity() {
 
         ${_buildDisponibilitaSection(persone, allocazioni, commesse, months, _ctx.getEffectiveCommessaDates, matrix)}
 
+        ${(() => {
+            const oggi = new Date().toISOString().slice(0, 7);
+            const pianificate = persone.filter(p => p.dataAssunzione?.slice(0, 7) > oggi && (p.statoAssunzione === 'in_ingresso' || p.statoAssunzione === 'da_ricercare'));
+            if (!pianificate.length) return '';
+            pianificate.sort((a, b) => (a.dataAssunzione || '').localeCompare(b.dataAssunzione || ''));
+            return `
+            <div class="res-disp-section" style="margin-bottom:12px;">
+                <div class="res-disp-header">
+                    <h4>Piano Assunzioni</h4>
+                    <span class="text-muted" style="font-size:.78rem;">${pianificate.length} ${pianificate.length === 1 ? 'posizione' : 'posizioni'}</span>
+                </div>
+                <div class="res-disp-body">
+                    <div class="table-container">
+                        <table class="res-table">
+                            <thead><tr>
+                                <th>Persona</th><th>Ruolo</th><th>BU</th><th>Stato</th><th>Assunzione</th><th class="col-num">Costo/Mese</th>
+                            </tr></thead>
+                            <tbody>${pianificate.map(p => `
+                                <tr>
+                                    <td><div class="res-person-name">${p.cognome} ${p.nome}</div></td>
+                                    <td>${p.ruolo || '—'}</td>
+                                    <td>${p.bu || '—'}</td>
+                                    <td>${p.statoAssunzione === 'in_ingresso' ? '<span class="res-badge-ingresso">In ingresso</span>' : '<span class="res-badge-ricerca">Da ricercare</span>'}</td>
+                                    <td>${formatYM(p.dataAssunzione?.slice(0, 7))}</td>
+                                    <td class="col-num">${p.costoMedioMese ? formatEuro(p.costoMedioMese) : '—'}</td>
+                                </tr>`).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>`;
+        })()}
     `;
 
     // Render cost charts (Chart.js)
