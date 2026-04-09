@@ -2343,11 +2343,11 @@ function _buildDisponibilitaSection(persone, allocazioni, commesse, months, getE
     }).join('');
 
     return `
-        <div class="res-disp-section">
-            <div class="res-disp-header">
-                <h4>Allocazioni in scadenza (prossimi 3 mesi)</h4>
-                <span class="text-muted" style="font-size:.78rem;">${inScadenza.length} ${inScadenza.length===1?'allocazione':'allocazioni'}</span>
-            </div>
+        <details class="res-disp-section">
+            <summary class="res-disp-header" style="cursor:pointer;list-style:none;">
+                <h4 style="display:inline;">Allocazioni in scadenza (prossimi 3 mesi)</h4>
+                <span class="text-muted" style="font-size:.78rem;margin-left:8px;">${inScadenza.length} ${inScadenza.length===1?'allocazione':'allocazioni'}</span>
+            </summary>
             <div class="res-disp-body">
                 ${inScadenza.length === 0 ? `<p class="res-disp-empty">Nessuna allocazione in scadenza nei prossimi 3 mesi.</p>` : `
                 <div class="table-container">
@@ -2360,7 +2360,7 @@ function _buildDisponibilitaSection(persone, allocazioni, commesse, months, getE
                     </table>
                 </div>`}
             </div>
-        </div>
+        </details>
 
         ${personeLibere.length > 0 ? `
         <div class="res-disp-section">
