@@ -1916,10 +1916,6 @@ function _renderCapacity() {
 
     const problemiScoperte = _detectAllocazioniScoperte(allocazioni, commesse, persone);
     const bannerHtml = _buildScoperteBanner(problemiScoperte);
-    const { problemi: problemiCessate, ignorati: cessateIgnorate } = _detectPersoneCessate(allocazioni, persone);
-    const cessateBannerHtml = _buildCessateBanner(problemiCessate);
-    const problemiPrimaAssunzione = _detectAllocazioniPrimaAssunzione(allocazioni, persone, _ctx.getEffectiveCommessaDates);
-    const primaAssunzioneBannerHtml = _buildPrimaAssunzioneBanner(problemiPrimaAssunzione);
 
     const dateRangeLabel = (() => {
         if (!dateRange.from && !dateRange.to) return 'Tutto il periodo';
@@ -1958,8 +1954,6 @@ function _renderCapacity() {
             </div>
         </div>
         ${bannerHtml}
-        ${cessateBannerHtml}
-        ${primaAssunzioneBannerHtml}
         <div class="res-capacity-kpis">
             <div class="res-kpi-mini">
                 <span class="res-kpi-label">Persone allocate</span>
@@ -2113,7 +2107,6 @@ function _renderCapacity() {
 
         ${_buildDisponibilitaSection(persone, allocazioni, commesse, months, _ctx.getEffectiveCommessaDates, matrix)}
 
-        ${_buildCessateIgnoratiSection(cessateIgnorate)}
     `;
 
     // Render cost charts (Chart.js)
@@ -2146,48 +2139,6 @@ function _renderCapacity() {
         btn.addEventListener('click', () => _sincronizzaAllocazione(btn.dataset.id));
     });
 
-    // Listener banner cessate — collassa/espandi
-    panel.querySelector('.res-cessate-toggle')?.addEventListener('click', () => {
-        const banner = panel.querySelector('.res-cessate-banner');
-        if (!banner) return;
-        const nowCollapsed = banner.classList.toggle('collapsed');
-        localStorage.setItem('res-cessate-banner-collapsed', nowCollapsed ? '1' : '0');
-        const chevron = banner.querySelector('.res-cessate-chevron');
-        if (chevron) chevron.textContent = nowCollapsed ? '▶' : '▼';
-    });
-
-    // Listener banner cessate — ignora singola riga
-    panel.querySelectorAll('.btn-ignora-cessato').forEach(btn => {
-        btn.addEventListener('click', e => {
-            e.stopPropagation();
-            const alloc = getAllocazione(btn.dataset.allocId);
-            if (alloc) saveAllocazione({ ...alloc, cessatoOk: true });
-            _renderCapacity();
-        });
-    });
-
-    // Listener sezione ignorati — collassa/espandi
-    panel.querySelector('.res-cessate-ignorati-toggle')?.addEventListener('click', () => {
-        const section = panel.querySelector('.res-cessate-ignorati');
-        if (!section) return;
-        const nowCollapsed = section.classList.toggle('collapsed');
-        localStorage.setItem('res-cessate-ignorati-collapsed', nowCollapsed ? '1' : '0');
-        const chevron = section.querySelector('.res-cessate-ignorati-chevron');
-        if (chevron) chevron.textContent = nowCollapsed ? '▶' : '▼';
-    });
-
-    // Listener sezione ignorati — ripristina singola riga
-    panel.querySelectorAll('.btn-ripristina-cessato').forEach(btn => {
-        btn.addEventListener('click', e => {
-            e.stopPropagation();
-            const alloc = getAllocazione(btn.dataset.allocId);
-            if (alloc) {
-                const { cessatoOk, ...rest } = alloc;
-                saveAllocazione(rest);
-            }
-            _renderCapacity();
-        });
-    });
 }
 
 // ─── DISPONIBILITÀ / FABBISOGNO ──────────────────────────────
