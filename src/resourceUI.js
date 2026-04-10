@@ -1141,29 +1141,45 @@ function _renderCommessaDetail(scenarioId, commesse, selectedCommesse = [], date
                     </div>
                 </div>
                 ${(() => {
-                    const ruoliNecessari = listRuoli().filter(r => (r.tipo || 'necessario') === 'necessario');
-                    if (!ruoliNecessari.length) return '';
-                    // Ruoli coperti: persone allocate su questa commessa che hanno un ruolo necessario
+                    const tuttiRuoli = listRuoli();
+                    const ruoliNecessari = tuttiRuoli.filter(r => (r.tipo || 'necessario') === 'necessario');
+                    const ruoliOpzionali = tuttiRuoli.filter(r => r.tipo === 'opzionale');
+                    if (!ruoliNecessari.length && !ruoliOpzionali.length) return '';
+                    if (allocazioni.length === 0) return '';
+
                     const ruoliAllocati = new Set();
                     for (const a of allocazioni) {
                         const p = persone.find(x => x.id === a.personaId);
                         if (p?.ruolo) ruoliAllocati.add(p.ruolo.toLowerCase());
                     }
-                    const coperti = ruoliNecessari.filter(r => ruoliAllocati.has(r.nome.toLowerCase()));
-                    const mancanti = ruoliNecessari.filter(r => !ruoliAllocati.has(r.nome.toLowerCase()));
-                    const perc = ruoliNecessari.length > 0 ? Math.round(coperti.length / ruoliNecessari.length * 100) : 100;
-                    const percColor = perc >= 80 ? 'var(--success, #22c55e)' : perc >= 50 ? '#f59e0b' : 'var(--danger, #ef4444)';
-                    if (allocazioni.length === 0) return ''; // non mostrare se nessuna allocazione
+
+                    const copertiNec = ruoliNecessari.filter(r => ruoliAllocati.has(r.nome.toLowerCase()));
+                    const mancantiNec = ruoliNecessari.filter(r => !ruoliAllocati.has(r.nome.toLowerCase()));
+                    const copertiOpt = ruoliOpzionali.filter(r => ruoliAllocati.has(r.nome.toLowerCase()));
+                    const mancantiOpt = ruoliOpzionali.filter(r => !ruoliAllocati.has(r.nome.toLowerCase()));
+
+                    const percNec = ruoliNecessari.length > 0 ? Math.round(copertiNec.length / ruoliNecessari.length * 100) : 100;
+                    const percColorNec = percNec >= 80 ? 'var(--success, #22c55e)' : percNec >= 50 ? '#f59e0b' : 'var(--danger, #ef4444)';
+
+                    const summaryParts = [];
+                    if (ruoliNecessari.length) summaryParts.push(`<span style="font-weight:700;color:${percColorNec};">Nec. ${copertiNec.length}/${ruoliNecessari.length}</span>`);
+                    if (ruoliOpzionali.length) summaryParts.push(`<span style="font-weight:600;color:#f59e0b;">Opz. ${copertiOpt.length}/${ruoliOpzionali.length}</span>`);
+
                     return `
                     <details style="border-top:1px solid var(--border);font-size:12px;">
                         <summary style="padding:8px 16px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;list-style:none;">
-                            <span style="font-weight:600;color:var(--text-muted);">Copertura ruoli necessari</span>
-                            <span style="font-weight:700;color:${percColor};">${coperti.length}/${ruoliNecessari.length} (${perc}%)</span>
+                            <span style="font-weight:600;color:var(--text-muted);">Copertura ruoli</span>
+                            <span style="display:flex;gap:12px;">${summaryParts.join('')}</span>
                         </summary>
                         <div style="padding:4px 16px 8px;">
-                        ${mancanti.length > 0 ? `<div class="res-copertura-bar">
-                            ${mancanti.map(r => `<span class="res-copertura-item res-copertura-miss">❌ ${r.codice ? r.codice + ' — ' : ''}${r.nome}</span>`).join('')}
-                        </div>` : '<span style="color:var(--success);font-size:11px;">✅ Tutti i ruoli necessari coperti</span>'}
+                        ${mancantiNec.length > 0 ? `<div style="margin-bottom:4px;font-size:11px;font-weight:600;color:var(--danger, #ef4444);">Necessari mancanti:</div>
+                        <div class="res-copertura-bar" style="margin-bottom:8px;">
+                            ${mancantiNec.map(r => `<span class="res-copertura-item res-copertura-miss">❌ ${r.codice ? r.codice + ' — ' : ''}${r.nome}</span>`).join('')}
+                        </div>` : '<div style="margin-bottom:8px;"><span style="color:var(--success);font-size:11px;">✅ Tutti i ruoli necessari coperti</span></div>'}
+                        ${mancantiOpt.length > 0 ? `<div style="margin-bottom:4px;font-size:11px;font-weight:600;color:#f59e0b;">Opzionali mancanti:</div>
+                        <div class="res-copertura-bar">
+                            ${mancantiOpt.map(r => `<span class="res-copertura-item" style="background:rgba(245,158,11,.12);color:#f59e0b;border-color:rgba(245,158,11,.3);">⚠ ${r.codice ? r.codice + ' — ' : ''}${r.nome}</span>`).join('')}
+                        </div>` : ''}
                         </div>
                     </details>`;
                 })()}
