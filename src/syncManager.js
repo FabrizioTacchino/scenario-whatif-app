@@ -401,6 +401,7 @@ async function _pushPersone(userId) {
     const persone = JSON.parse(raw);
     if (!Array.isArray(persone) || persone.length === 0) return;
 
+    const pushTime = new Date().toISOString();
     const rows = persone.map(p => ({
         user_id: userId,
         local_id: p.id,
@@ -420,8 +421,8 @@ async function _pushPersone(userId) {
         note: p.note || '',
         attivo: p.attivo !== false,
         stato_assunzione: p.statoAssunzione || 'assunta',
-        created_at: p.createdAt || new Date().toISOString(),
-        updated_at: p.updatedAt || new Date().toISOString(),
+        created_at: p.createdAt || pushTime,
+        updated_at: pushTime, // sempre timestamp fresco per garantire propagazione
         deleted: false
     }));
 
@@ -444,6 +445,7 @@ async function _pushAllocazioni(userId) {
     const allocazioni = JSON.parse(raw);
     if (!Array.isArray(allocazioni) || allocazioni.length === 0) return;
 
+    const pushTime = new Date().toISOString();
     const rows = allocazioni.map(a => ({
         user_id: userId,
         local_id: a.id,
@@ -460,8 +462,8 @@ async function _pushAllocazioni(userId) {
         origine: a.origine || 'manuale',
         is_base: a.isBase || false,
         note: a.note || '',
-        created_at: a.createdAt || new Date().toISOString(),
-        updated_at: a.updatedAt || new Date().toISOString(),
+        created_at: a.createdAt || pushTime,
+        updated_at: pushTime, // sempre timestamp fresco per garantire propagazione
         deleted: false
     }));
 
@@ -484,6 +486,7 @@ async function _pushRuoli(userId) {
     const ruoli = JSON.parse(raw);
     if (!Array.isArray(ruoli) || ruoli.length === 0) return;
 
+    const pushTime = new Date().toISOString();
     const rows = ruoli.map(r => ({
         user_id: userId,
         local_id: r.id,
@@ -491,7 +494,7 @@ async function _pushRuoli(userId) {
         codice: r.codice || '',
         tipo: r.tipo || 'necessario',
         costo_medio: r.costoMedio || 0,
-        updated_at: r.updatedAt || new Date().toISOString(),
+        updated_at: pushTime, // sempre timestamp fresco per garantire propagazione
         deleted: false
     }));
 
@@ -752,6 +755,13 @@ async function _pullPreferences(userId) {
 // ─── Pull if newer (periodic sync — shared) ─────────────────
 
 async function _pullIfNewer(since) {
+    // Apply a 5-minute buffer to tolerate clock drift between clients
+    // (timestamp on cloud is set by the pushing client's local clock)
+    if (since && since !== '1970-01-01T00:00:00Z') {
+        const buffered = new Date(new Date(since).getTime() - 5 * 60 * 1000).toISOString();
+        since = buffered;
+    }
+
     // Baseline
     const { data: bl } = await supabase
         .from('baselines')
