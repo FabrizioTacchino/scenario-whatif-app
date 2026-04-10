@@ -61,9 +61,12 @@ export function saveRuolo(data) {
 }
 
 export function deleteRuolo(id) {
-    const all = listRuoli().filter(r => r.id !== id);
-    localStorage.setItem(RUOLI_KEY, JSON.stringify(all));
-    trackDeletion('ruolo', id);
+    const all = listRuoli();
+    const ruolo = all.find(r => r.id === id);
+    const remaining = all.filter(r => r.id !== id);
+    localStorage.setItem(RUOLI_KEY, JSON.stringify(remaining));
+    // Track deletion with name for cloud-side dedup cleanup
+    trackDeletion('ruolo', id, ruolo?.nome);
 }
 
 /**

@@ -166,7 +166,7 @@ export function onPresenceChange(callback) {
  * Track an explicit deletion so it can be pushed to cloud.
  * Call this when the user deletes a scenario/persona/allocazione locally.
  */
-export function trackDeletion(type, localId) {
+export function trackDeletion(type, localId, extra = null) {
     const keyMap = {
         'scenario': DELETED_SCENARIOS_KEY,
         'persona': DELETED_PERSONE_KEY,
@@ -175,6 +175,19 @@ export function trackDeletion(type, localId) {
     };
     const key = keyMap[type];
     if (!key) return;
+
+    // For ruoli, store {id, nome} to allow cloud-side dedup deletion by name
+    if (type === 'ruolo') {
+        const list = JSON.parse(localStorage.getItem(key) || '[]');
+        // Normalize: convert old plain-string entries to objects
+        const normalized = list.map(item => typeof item === 'string' ? { id: item, nome: null } : item);
+        if (!normalized.some(e => e.id === localId)) {
+            normalized.push({ id: localId, nome: extra || null });
+            localStorage.setItem(key, JSON.stringify(normalized));
+        }
+        return;
+    }
+
     const list = JSON.parse(localStorage.getItem(key) || '[]');
     if (!list.includes(localId)) {
         list.push(localId);
@@ -488,8 +501,50 @@ async function _pushRuoli(userId) {
 
     if (error) throw new Error(`Push ruoli failed: ${error.message}`);
 
-    // Soft-delete only explicitly deleted ruoli
-    await _pushExplicitDeletions('ruoli', DELETED_RUOLI_KEY);
+    // Soft-delete only explicitly deleted ruoli (by id AND by name to handle cloud duplicates)
+    await _pushRuoliDeletions();
+}
+
+async function _pushRuoliDeletions() {
+    const raw = localStorage.getItem(DELETED_RUOLI_KEY);
+    if (!raw) return;
+
+    let entries;
+    try { entries = JSON.parse(raw); } catch { return; }
+    if (!Array.isArray(entries) || entries.length === 0) return;
+
+    // Normalize entries (some may be plain strings from old version)
+    const normalized = entries.map(e => typeof e === 'string' ? { id: e, nome: null } : e);
+    const ids = normalized.map(e => e.id).filter(Boolean);
+    const names = normalized.map(e => e.nome).filter(Boolean);
+
+    const nowIso = new Date().toISOString();
+
+    // 1. Delete by local_id
+    if (ids.length > 0) {
+        const { error } = await supabase
+            .from('ruoli')
+            .update({ deleted: true, updated_at: nowIso })
+            .in('local_id', ids);
+        if (error) {
+            console.warn('[SyncManager] Push ruoli deletions by id failed:', error.message);
+            return;
+        }
+    }
+
+    // 2. Delete by nome (case-insensitive) — covers cloud duplicates with different local_id
+    for (const nome of names) {
+        const { error } = await supabase
+            .from('ruoli')
+            .update({ deleted: true, updated_at: nowIso })
+            .ilike('nome', nome);
+        if (error) {
+            console.warn(`[SyncManager] Push ruoli deletion by name "${nome}" failed:`, error.message);
+            return;
+        }
+    }
+
+    localStorage.removeItem(DELETED_RUOLI_KEY);
 }
 
 async function _pushAudit(userId) {
