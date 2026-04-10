@@ -1210,7 +1210,7 @@ function _renderCommessaDetail(scenarioId, commesse, selectedCommesse = [], date
                 _econSortCol = col;
                 _econSortDir = 'asc';
             }
-            _renderEconomics();
+            _renderCommesseRisorse();
         });
     });
 
