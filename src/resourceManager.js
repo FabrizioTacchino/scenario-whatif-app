@@ -63,6 +63,7 @@ export function saveRuolo(data) {
 export function deleteRuolo(id) {
     const all = listRuoli().filter(r => r.id !== id);
     localStorage.setItem(RUOLI_KEY, JSON.stringify(all));
+    trackDeletion('ruolo', id);
 }
 
 /**
@@ -289,6 +290,7 @@ export function saveAllocazione(data, origine = 'manuale') {
 export function deleteAllocazione(id) {
     const all = listAllocazioni().filter(a => a.id !== id);
     localStorage.setItem(ALLOCAZIONI_KEY, JSON.stringify(all));
+    trackDeletion('allocazione', id);
     _audit('allocazione', id, 'delete', null, null, 'manuale');
 }
 

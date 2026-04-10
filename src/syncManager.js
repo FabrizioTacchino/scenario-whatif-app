@@ -25,6 +25,7 @@ const LAST_SYNC_KEY = 'whatif_sync_last';
 const DELETED_SCENARIOS_KEY = 'whatif_deleted_scenarios';
 const DELETED_PERSONE_KEY = 'whatif_deleted_persone';
 const DELETED_ALLOCAZIONI_KEY = 'whatif_deleted_allocazioni';
+const DELETED_RUOLI_KEY = 'whatif_deleted_ruoli';
 
 // Role-based write permissions per entity
 const WRITE_ROLES = {
@@ -169,7 +170,8 @@ export function trackDeletion(type, localId) {
     const keyMap = {
         'scenario': DELETED_SCENARIOS_KEY,
         'persona': DELETED_PERSONE_KEY,
-        'allocazione': DELETED_ALLOCAZIONI_KEY
+        'allocazione': DELETED_ALLOCAZIONI_KEY,
+        'ruolo': DELETED_RUOLI_KEY
     };
     const key = keyMap[type];
     if (!key) return;
@@ -485,6 +487,9 @@ async function _pushRuoli(userId) {
         .upsert(rows, { onConflict: 'local_id' });
 
     if (error) throw new Error(`Push ruoli failed: ${error.message}`);
+
+    // Soft-delete only explicitly deleted ruoli
+    await _pushExplicitDeletions('ruoli', DELETED_RUOLI_KEY);
 }
 
 async function _pushAudit(userId) {
