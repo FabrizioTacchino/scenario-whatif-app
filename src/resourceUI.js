@@ -67,6 +67,8 @@ let _ruoliSortDir = 'asc';
 let _capacityPersonaId = '';    // filtro persona in Capacity
 let _capacitySortCol = 'persona'; // 'persona' | 'ruolo'
 let _capacitySortDir = 'asc';
+let _econSortCol = 'persona';    // 'persona' | 'ruolo' | 'codice_ruolo'
+let _econSortDir = 'asc';
 let _resFilterAlloc = 'all'; // 'all' | 'con' | 'senza'
 let _personaStatusFilter = null; // null | 'attive' | 'scadenza' | 'cessate'
 let _capacityCharts = {};   // Chart.js instances for capacity tab
@@ -1023,6 +1025,7 @@ function _renderCommessaDetail(scenarioId, commesse, selectedCommesse = [], date
 
     let grandTeorico = 0, grandProb = 0, grandFte = 0;
     const grandPersoneSet = new Set();
+    const allRuoli = listRuoli();
 
     const cards = commesseDaRender.map(commessa => {
         const allocazioni = listAllocazioni({ codiceCommessa: commessa.codice, scenarioId });
@@ -1030,16 +1033,15 @@ function _renderCommessaDetail(scenarioId, commesse, selectedCommesse = [], date
         let costoTeorico = 0, costoProb = 0, fteTotal = 0;
         const personeCommessaSet = new Set();
 
-        const rows = allocazioni.map(a => {
+        // Build row data for sorting
+        const rowData = [];
+        for (const a of allocazioni) {
             const p = persone.find(x => x.id === a.personaId);
-            if (!p) return `
-                <tr>
-                    <td colspan="9"><span class="res-warn-inline">Persona non trovata (id: ${a.personaId || '—'}) — dati da correggere</span></td>
-                </tr>`;
+            if (!p) { rowData.push({ missing: true, personaId: a.personaId }); continue; }
             const { di: effDi, df: effDf } = _effDates(a);
             const months = _filteredMonths(effDi || a.dataInizio, effDf || a.dataFine);
             const mesi = months.length;
-            if (mesi === 0) return ''; // allocazione fuori dal periodo filtrato
+            if (mesi === 0) continue;
             const costoMese = (p.costoMedioMese || 0) * a.percentuale / 100;
             const costoAlloc = costoMese * mesi;
             costoTeorico += costoAlloc;
@@ -1047,17 +1049,41 @@ function _renderCommessaDetail(scenarioId, commesse, selectedCommesse = [], date
             fteTotal += a.percentuale / 100;
             personeCommessaSet.add(a.personaId);
             grandPersoneSet.add(a.personaId);
+            const ruoloObj = allRuoli.find(r => r.nome && p.ruolo && r.nome.toLowerCase() === p.ruolo.toLowerCase());
+            rowData.push({ p, a, mesi, costoMese, costoAlloc, prob, codiceRuolo: ruoloObj?.codice || '' });
+        }
+
+        // Sort rows
+        rowData.sort((x, y) => {
+            if (x.missing) return 1;
+            if (y.missing) return -1;
+            let va, vb;
+            if (_econSortCol === 'ruolo') {
+                va = (x.p.ruolo || '').toLowerCase(); vb = (y.p.ruolo || '').toLowerCase();
+            } else if (_econSortCol === 'codice_ruolo') {
+                va = (x.codiceRuolo || '').toLowerCase(); vb = (y.codiceRuolo || '').toLowerCase();
+            } else {
+                va = `${x.p.cognome} ${x.p.nome}`.toLowerCase(); vb = `${y.p.cognome} ${y.p.nome}`.toLowerCase();
+            }
+            const cmp = va.localeCompare(vb, 'it');
+            return _econSortDir === 'asc' ? cmp : -cmp;
+        });
+
+        const rows = rowData.map(d => {
+            if (d.missing) return `<tr><td colspan="10"><span class="res-warn-inline">Persona non trovata (id: ${d.personaId || '—'}) — dati da correggere</span></td></tr>`;
+            const { p, a, mesi, costoMese, costoAlloc, prob: pr, codiceRuolo } = d;
             return `
                 <tr>
                     <td><div class="res-person-name">${p.cognome} ${p.nome}</div></td>
                     <td>${p.ruolo || '<span class="text-muted">—</span>'}</td>
+                    <td>${codiceRuolo || '<span class="text-muted">—</span>'}</td>
                     <td class="col-num"><span class="res-perc-badge ${a.percentuale===100?'full':a.percentuale>=50?'half':'low'}">${a.percentuale}%</span></td>
                     <td>${_fmtDateCell(a.dataInizio, a.aggancioInizio, _effDates(a).di)}</td>
                     <td>${_fmtDateCell(a.dataFine, a.aggancioFine, _effDates(a).df)}</td>
                     <td class="col-num">${mesi}</td>
                     <td class="col-num">${costoMese ? formatEuro(costoMese) : '—'}</td>
                     <td class="col-num">${costoAlloc ? formatEuro(costoAlloc) : '—'}</td>
-                    <td class="col-num">${formatEuro(costoAlloc * prob)}</td>
+                    <td class="col-num">${formatEuro(costoAlloc * pr)}</td>
                 </tr>
             `;
         }).filter(r => r).join('');
@@ -1070,7 +1096,10 @@ function _renderCommessaDetail(scenarioId, commesse, selectedCommesse = [], date
             ? `<div class="table-container">
                 <table class="res-table">
                     <thead><tr>
-                        <th>Persona</th><th>Ruolo</th><th class="col-num">%</th>
+                        <th class="res-econ-sort" data-sort="persona" style="cursor:pointer;user-select:none;">Persona ${_econSortCol === 'persona' ? (_econSortDir === 'asc' ? '▲' : '▼') : ''}</th>
+                        <th class="res-econ-sort" data-sort="ruolo" style="cursor:pointer;user-select:none;">Ruolo ${_econSortCol === 'ruolo' ? (_econSortDir === 'asc' ? '▲' : '▼') : ''}</th>
+                        <th class="res-econ-sort" data-sort="codice_ruolo" style="cursor:pointer;user-select:none;">Cod. Ruolo ${_econSortCol === 'codice_ruolo' ? (_econSortDir === 'asc' ? '▲' : '▼') : ''}</th>
+                        <th class="col-num">%</th>
                         <th>Da</th><th>A</th><th class="col-num">Mesi nel periodo</th>
                         <th class="col-num">Costo/Mese</th><th class="col-num">Costo Tot.</th><th class="col-num">Costo Prob.</th>
                     </tr></thead>
@@ -1170,6 +1199,20 @@ function _renderCommessaDetail(scenarioId, commesse, selectedCommesse = [], date
         </div>` : '';
 
     panel.innerHTML = totalHtml + cards;
+
+    // Sort colonne tabelle economics
+    panel.querySelectorAll('.res-econ-sort').forEach(th => {
+        th.addEventListener('click', () => {
+            const col = th.dataset.sort;
+            if (_econSortCol === col) {
+                _econSortDir = _econSortDir === 'asc' ? 'desc' : 'asc';
+            } else {
+                _econSortCol = col;
+                _econSortDir = 'asc';
+            }
+            _renderEconomics();
+        });
+    });
 
     // Event delegation per bottoni Rinomina
     panel.querySelectorAll('.res-btn-rename-commessa').forEach(btn => {
