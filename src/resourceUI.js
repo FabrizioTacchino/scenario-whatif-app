@@ -1126,15 +1126,17 @@ function _renderCommessaDetail(scenarioId, commesse, selectedCommesse = [], date
                     const percColor = perc >= 80 ? 'var(--success, #22c55e)' : perc >= 50 ? '#f59e0b' : 'var(--danger, #ef4444)';
                     if (allocazioni.length === 0) return ''; // non mostrare se nessuna allocazione
                     return `
-                    <div style="padding:8px 16px;border-top:1px solid var(--border);font-size:12px;">
-                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+                    <details style="border-top:1px solid var(--border);font-size:12px;">
+                        <summary style="padding:8px 16px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;list-style:none;">
                             <span style="font-weight:600;color:var(--text-muted);">Copertura ruoli necessari</span>
                             <span style="font-weight:700;color:${percColor};">${coperti.length}/${ruoliNecessari.length} (${perc}%)</span>
-                        </div>
+                        </summary>
+                        <div style="padding:4px 16px 8px;">
                         ${mancanti.length > 0 ? `<div class="res-copertura-bar">
                             ${mancanti.map(r => `<span class="res-copertura-item res-copertura-miss">❌ ${r.codice ? r.codice + ' — ' : ''}${r.nome}</span>`).join('')}
                         </div>` : '<span style="color:var(--success);font-size:11px;">✅ Tutti i ruoli necessari coperti</span>'}
-                    </div>`;
+                        </div>
+                    </details>`;
                 })()}
                 ${bodyHtml}
             </div>
