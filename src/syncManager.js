@@ -88,14 +88,15 @@ export async function initSync() {
         let result;
 
         if (localHasData && !cloudHasData && _userRole !== 'viewer' && canWrite('whatif_scenarios')) {
+            // Solo locale ha dati: push iniziale al cloud
             await fullPush(userId);
             result = 'pushed';
-        } else if (!localHasData && cloudHasData) {
+        } else if (cloudHasData) {
+            // Cloud ha dati: SEMPRE full pull all'avvio per allinearsi
+            // Questo garantisce che si parta dalla fonte di verità (cloud)
+            // e non si sovrascrivano modifiche di altri utenti con dati locali stale
             await fullPull(userId);
             result = 'pulled';
-        } else if (localHasData && cloudHasData) {
-            await incrementalSync(userId);
-            result = 'synced';
         } else {
             result = 'empty';
         }
