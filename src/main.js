@@ -115,6 +115,29 @@ document.addEventListener('DOMContentLoaded', async () => {
                 localStorage.setItem('whatif_allocazioni', JSON.stringify(_cleaned));
             }
         }
+        // Dedup ruoli (by nome)
+        const _rawR = localStorage.getItem('whatif_ruoli');
+        if (_rawR) {
+            const _ruoli = JSON.parse(_rawR);
+            const _seenR = new Map();
+            const _removeR = new Set();
+            for (let i = 0; i < _ruoli.length; i++) {
+                const r = _ruoli[i];
+                const key = (r.nome || '').toLowerCase().trim();
+                if (!key) continue;
+                if (_seenR.has(key)) {
+                    const prevIdx = _seenR.get(key);
+                    const prev = _ruoli[prevIdx];
+                    if ((r.updatedAt || '') > (prev.updatedAt || '')) {
+                        _removeR.add(prevIdx); _seenR.set(key, i);
+                    } else { _removeR.add(i); }
+                } else { _seenR.set(key, i); }
+            }
+            if (_removeR.size > 0) {
+                console.warn(`[Startup] Rimossi ${_removeR.size} ruoli duplicati`);
+                localStorage.setItem('whatif_ruoli', JSON.stringify(_ruoli.filter((_, i) => !_removeR.has(i))));
+            }
+        }
     } catch (e) { console.warn('[Startup] Dedup error:', e); }
 
     initTheme();

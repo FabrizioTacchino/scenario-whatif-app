@@ -211,6 +211,7 @@ export async function fullPull(userId) {
     _deduplicateAllocazioni();
     await _pullAudit();
     await _pullRuoli();
+    _deduplicateRuoli();
     await _pullPreferences(userId); // preferences remain per-user
 }
 
@@ -253,9 +254,10 @@ export async function incrementalSync(userId) {
         const lastSync = localStorage.getItem(LAST_SYNC_KEY) || '1970-01-01T00:00:00Z';
         await _pullIfNewer(lastSync);
 
-        // Post-pull: deduplicate persone + allocazioni (safety net)
+        // Post-pull: deduplicate persone + allocazioni + ruoli (safety net)
         _deduplicatePersone();
         _deduplicateAllocazioni();
+        _deduplicateRuoli();
 
         // Detect if pull changed any data
         let dataChanged = false;
@@ -868,7 +870,18 @@ async function _pullIfNewer(since) {
                         localRuoli[idx] = mapped;
                     }
                 } else {
-                    localRuoli.push(mapped);
+                    // Dedup: check if a role with the same name already exists locally
+                    const dupIdx = localRuoli.findIndex(r =>
+                        r.id !== mapped.id &&
+                        r.nome && mapped.nome &&
+                        r.nome.toLowerCase() === mapped.nome.toLowerCase()
+                    );
+                    if (dupIdx >= 0) {
+                        console.info(`[SyncManager] Ruolo dedup: merging local ${localRuoli[dupIdx].id} → remote ${mapped.id} (${mapped.nome})`);
+                        localRuoli[dupIdx] = mapped;
+                    } else {
+                        localRuoli.push(mapped);
+                    }
                 }
             }
         }
@@ -980,6 +993,48 @@ function _deduplicatePersone() {
                 }
             }
         } catch (e) { console.warn('[SyncManager] Remap after persona dedup error:', e); }
+    }
+}
+
+/**
+ * Remove duplicate ruoli from localStorage.
+ * Two ruoli are duplicates if they share the same nome (case-insensitive).
+ * Keeps the one with the most recent updatedAt.
+ */
+function _deduplicateRuoli() {
+    const raw = localStorage.getItem('whatif_ruoli');
+    if (!raw) return;
+
+    let ruoli;
+    try { ruoli = JSON.parse(raw); } catch { return; }
+    if (!Array.isArray(ruoli) || ruoli.length === 0) return;
+
+    const seen = new Map();
+    const toRemove = new Set();
+
+    for (let i = 0; i < ruoli.length; i++) {
+        const r = ruoli[i];
+        const key = (r.nome || '').toLowerCase().trim();
+        if (!key) continue;
+
+        if (seen.has(key)) {
+            const prevIdx = seen.get(key);
+            const prev = ruoli[prevIdx];
+            if ((r.updatedAt || '') > (prev.updatedAt || '')) {
+                toRemove.add(prevIdx);
+                seen.set(key, i);
+            } else {
+                toRemove.add(i);
+            }
+        } else {
+            seen.set(key, i);
+        }
+    }
+
+    if (toRemove.size > 0) {
+        console.warn(`[SyncManager] Dedup: removing ${toRemove.size} duplicate ruoli`);
+        const cleaned = ruoli.filter((_, i) => !toRemove.has(i));
+        localStorage.setItem('whatif_ruoli', JSON.stringify(cleaned));
     }
 }
 
