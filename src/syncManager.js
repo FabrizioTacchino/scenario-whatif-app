@@ -42,10 +42,13 @@ let _hashes = {};
 let _pollTimer = null;
 let _periodicTimer = null;
 let _realtimeChannel = null;
+let _presenceChannel = null;
 let _syncing = false;
 let _userRole = null;
 let _userEmail = null;
 let _userId = null;
+let _onlineUsers = []; // { email, role, joinedAt }
+let _presenceListeners = [];
 let _status = { state: 'disconnected', lastSync: null, pending: 0, error: null };
 let _listeners = [];
 
@@ -108,6 +111,7 @@ export async function initSync() {
         _startPolling(userId);
         _startPeriodicSync(userId);
         _startRealtime(userId);
+        _startPresence(userId);
 
         window.addEventListener('online', () => _flushQueue(userId));
         window.addEventListener('offline', () => _setStatus({ state: 'offline' }));
@@ -141,6 +145,23 @@ export function getCurrentRole() {
 }
 
 /**
+ * Get list of currently online users (from Supabase Presence).
+ * Returns: [{ email, role, joinedAt }]
+ */
+export function getOnlineUsers() {
+    return [..._onlineUsers];
+}
+
+/**
+ * Listen for changes in online users.
+ * Callback receives the updated list of online users.
+ */
+export function onPresenceChange(callback) {
+    _presenceListeners.push(callback);
+    return () => { _presenceListeners = _presenceListeners.filter(l => l !== callback); };
+}
+
+/**
  * Track an explicit deletion so it can be pushed to cloud.
  * Call this when the user deletes a scenario/persona/allocazione locally.
  */
@@ -166,10 +187,16 @@ export function stopSync() {
         supabase.removeChannel(_realtimeChannel);
         _realtimeChannel = null;
     }
+    if (_presenceChannel) {
+        supabase.removeChannel(_presenceChannel);
+        _presenceChannel = null;
+    }
     _hashes = {};
     _userRole = null;
     _userEmail = null;
     _userId = null;
+    _onlineUsers = [];
+    _notifyPresenceListeners();
     _setStatus({ state: 'disconnected', lastSync: null, pending: 0, error: null });
 }
 
@@ -1226,6 +1253,57 @@ function _startRealtime(userId) {
         });
     } catch (err) {
         console.warn('[Realtime] Failed to start — falling back to polling:', err.message);
+    }
+}
+
+// ─── Presence ───────────────────────────────────────────────
+
+function _notifyPresenceListeners() {
+    _presenceListeners.forEach(l => l([..._onlineUsers]));
+}
+
+function _startPresence(userId) {
+    if (_presenceChannel) {
+        supabase.removeChannel(_presenceChannel);
+        _presenceChannel = null;
+    }
+
+    try {
+        _presenceChannel = supabase.channel('online-users', {
+            config: { presence: { key: userId } }
+        });
+
+        _presenceChannel.on('presence', { event: 'sync' }, () => {
+            const state = _presenceChannel.presenceState();
+            const users = [];
+            for (const [, presences] of Object.entries(state)) {
+                for (const p of presences) {
+                    // Don't include self
+                    if (p.user_id === userId) continue;
+                    users.push({
+                        email: p.email || '?',
+                        role: p.role || 'viewer',
+                        joinedAt: p.joined_at || '',
+                    });
+                }
+            }
+            _onlineUsers = users;
+            _notifyPresenceListeners();
+        });
+
+        _presenceChannel.subscribe(async (status) => {
+            if (status === 'SUBSCRIBED') {
+                await _presenceChannel.track({
+                    user_id: userId,
+                    email: _userEmail,
+                    role: _userRole,
+                    joined_at: new Date().toISOString(),
+                });
+                console.info('[Presence] Tracking started');
+            }
+        });
+    } catch (err) {
+        console.warn('[Presence] Failed to start:', err.message);
     }
 }
 

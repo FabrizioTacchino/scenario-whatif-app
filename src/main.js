@@ -17,7 +17,7 @@ import { renameCommessaCodice, listPersone, listAllocazioni } from './resourceMa
 import { computeResourceMatrix, computeResourceKpis } from './resourceEngine.js';
 import { generateReport } from './reportGenerator.js';
 import { supabase, signIn, signUp, signOut, getSession, onAuthStateChange, getUserRole, listUsers, updateUserRole } from './supabaseClient.js';
-import { initSync, stopSync, fullPush, fullPull, getSyncStatus, onSyncStatusChange, incrementalSync, trackDeletion, getCurrentRole, canWrite, fetchAllScenariosFromCloud, pushScenarioApproval, pushScenarioDelete, pushSingleScenario, pushScenarioRestore } from './syncManager.js';
+import { initSync, stopSync, fullPush, fullPull, getSyncStatus, onSyncStatusChange, incrementalSync, trackDeletion, getCurrentRole, canWrite, fetchAllScenariosFromCloud, pushScenarioApproval, pushScenarioDelete, pushSingleScenario, pushScenarioRestore, onPresenceChange, getOnlineUsers } from './syncManager.js';
 import { Chart, registerables } from 'chart.js';
 import ChartDataLabels from 'chartjs-plugin-datalabels';
 
@@ -354,6 +354,40 @@ async function initCloudSync() {
             }
             _showSyncUpdateBanner();
         }
+    });
+
+    // Presence: show online users indicator
+    onPresenceChange((users) => {
+        const indicator = $('#presence-indicator');
+        const countEl = $('#presence-count');
+        const listEl = $('#presence-list');
+        if (!indicator) return;
+
+        if (users.length > 0) {
+            indicator.classList.remove('hidden');
+            countEl.textContent = users.length;
+            listEl.innerHTML = users.map(u => {
+                const name = u.email ? u.email.split('@')[0] : '?';
+                const roleLabel = u.role === 'admin' ? 'Admin' : u.role === 'editor' ? 'Editor' : u.role === 'hr' ? 'HR' : u.role === 'commercial' ? 'Commerciale' : u.role || '';
+                return `<div style="padding:3px 0;display:flex;justify-content:space-between;align-items:center;">
+                    <span style="color:var(--text);">${name}</span>
+                    <span style="color:var(--text-muted);font-size:10px;background:var(--bg-2,#f0f0f0);padding:1px 6px;border-radius:3px;">${roleLabel}</span>
+                </div>`;
+            }).join('');
+        } else {
+            indicator.classList.add('hidden');
+        }
+    });
+
+    // Toggle presence dropdown
+    $('#presence-indicator')?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const dropdown = $('#presence-dropdown');
+        if (dropdown) dropdown.classList.toggle('hidden');
+    });
+    document.addEventListener('click', () => {
+        const dropdown = $('#presence-dropdown');
+        if (dropdown) dropdown.classList.add('hidden');
     });
 }
 

@@ -217,6 +217,15 @@
             </svg>
             <span id="cloud-sync-label" style="font-size:11px;margin-left:2px;">Cloud</span>
           </button>
+          <span id="presence-indicator" class="hidden" style="margin-left:6px;font-size:11px;display:inline-flex;align-items:center;gap:4px;cursor:pointer;position:relative;" title="Utenti connessi">
+            <span style="width:7px;height:7px;border-radius:50%;background:var(--success, #22c55e);display:inline-block;"></span>
+            <span id="presence-count">0</span>
+            <span id="presence-label" style="color:var(--text-muted);">online</span>
+            <div id="presence-dropdown" class="hidden" style="position:absolute;top:100%;right:0;margin-top:6px;background:var(--bg-card,#fff);border:1px solid var(--border);border-radius:6px;padding:8px 12px;box-shadow:0 4px 12px rgba(0,0,0,.15);z-index:1200;min-width:180px;font-size:12px;">
+              <div style="font-weight:600;margin-bottom:6px;color:var(--text);">Utenti connessi</div>
+              <div id="presence-list"></div>
+            </div>
+          </span>
           <button id="btn-theme-toggle" class="btn btn-outline btn-sm" title="Cambia tema" style="margin-left: 4px;">
             <svg class="sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
               stroke-width="2">
