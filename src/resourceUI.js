@@ -1162,8 +1162,8 @@ function _renderCommessaDetail(scenarioId, commesse, selectedCommesse = [], date
                     const percColorNec = percNec >= 80 ? 'var(--success, #22c55e)' : percNec >= 50 ? '#f59e0b' : 'var(--danger, #ef4444)';
 
                     const summaryParts = [];
-                    if (ruoliNecessari.length) summaryParts.push(`<span style="font-weight:700;color:${percColorNec};">Nec. ${copertiNec.length}/${ruoliNecessari.length}</span>`);
-                    if (ruoliOpzionali.length) summaryParts.push(`<span style="font-weight:600;color:#f59e0b;">Opz. ${copertiOpt.length}/${ruoliOpzionali.length}</span>`);
+                    if (ruoliNecessari.length) summaryParts.push(`<span style="font-weight:700;color:${mancantiNec.length > 0 ? 'var(--danger, #ef4444)' : 'var(--success, #22c55e)'};">Nec. ${mancantiNec.length > 0 ? mancantiNec.length + ' manc.' : '✓'}</span>`);
+                    if (ruoliOpzionali.length) summaryParts.push(`<span style="font-weight:600;color:${mancantiOpt.length > 0 ? '#f59e0b' : 'var(--success, #22c55e)'};">Opz. ${mancantiOpt.length > 0 ? mancantiOpt.length + ' manc.' : '✓'}</span>`);
 
                     return `
                     <details style="border-top:1px solid var(--border);font-size:12px;">
