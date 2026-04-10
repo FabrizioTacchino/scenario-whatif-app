@@ -18,7 +18,7 @@ const SYNC_KEYS = [
 ];
 
 const POLL_INTERVAL_MS = 2000;
-const PERIODIC_SYNC_MS = 60 * 1000; // 1 min
+const PERIODIC_SYNC_MS = 15 * 1000; // 15 sec
 const MAX_RETRY = 3;
 const QUEUE_KEY = 'whatif_sync_queue';
 const LAST_SYNC_KEY = 'whatif_sync_last';
