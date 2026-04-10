@@ -41,9 +41,11 @@ const WRITE_ROLES = {
 let _hashes = {};
 let _pollTimer = null;
 let _periodicTimer = null;
+let _realtimeChannel = null;
 let _syncing = false;
 let _userRole = null;
 let _userEmail = null;
+let _userId = null;
 let _status = { state: 'disconnected', lastSync: null, pending: 0, error: null };
 let _listeners = [];
 
@@ -101,9 +103,11 @@ export async function initSync() {
             result = 'empty';
         }
 
+        _userId = userId;
         _snapshotHashes();
         _startPolling(userId);
         _startPeriodicSync(userId);
+        _startRealtime(userId);
 
         window.addEventListener('online', () => _flushQueue(userId));
         window.addEventListener('offline', () => _setStatus({ state: 'offline' }));
@@ -158,9 +162,14 @@ export function trackDeletion(type, localId) {
 export function stopSync() {
     if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null; }
     if (_periodicTimer) { clearInterval(_periodicTimer); _periodicTimer = null; }
+    if (_realtimeChannel) {
+        supabase.removeChannel(_realtimeChannel);
+        _realtimeChannel = null;
+    }
     _hashes = {};
     _userRole = null;
     _userEmail = null;
+    _userId = null;
     _setStatus({ state: 'disconnected', lastSync: null, pending: 0, error: null });
 }
 
@@ -1074,6 +1083,19 @@ async function _pushEntity(localStorageKey, userId) {
     }
 
     try {
+        // Conflict detection: check if remote data changed since our last sync
+        const conflict = await _detectConflict(localStorageKey);
+        if (conflict) {
+            console.warn(`[SyncManager] Conflict detected on ${localStorageKey} — pulling remote first`);
+            _setStatus({ state: 'connected', conflict: localStorageKey });
+            // Pull remote changes first, then re-push
+            const lastSync = localStorage.getItem(LAST_SYNC_KEY) || '1970-01-01T00:00:00Z';
+            await _pullIfNewer(lastSync);
+            _deduplicatePersone();
+            _deduplicateAllocazioni();
+            _deduplicateRuoli();
+        }
+
         switch (localStorageKey) {
             case 'whatif_baseline': await _pushBaseline(userId); break;
             case 'whatif_scenarios': await _pushScenarios(userId); break;
@@ -1083,12 +1105,44 @@ async function _pushEntity(localStorageKey, userId) {
             case 'whatif_ruoli': await _pushRuoli(userId); break;
         }
         const serverNow = await _getServerTime();
-        _setStatus({ state: 'connected', lastSync: serverNow, error: null });
+        _setStatus({ state: 'connected', lastSync: serverNow, error: null, conflict: null });
         localStorage.setItem(LAST_SYNC_KEY, serverNow);
     } catch (err) {
         console.error(`[SyncManager] Push ${localStorageKey} failed:`, err);
         _queueOffline({ op: 'push', key: localStorageKey, timestamp: new Date().toISOString() });
         _setStatus({ state: 'error', error: err.message });
+    }
+}
+
+/**
+ * Conflict detection: check if the remote table has rows updated
+ * after our last sync timestamp by a different user.
+ */
+async function _detectConflict(localStorageKey) {
+    const lastSync = localStorage.getItem(LAST_SYNC_KEY);
+    if (!lastSync) return false;
+
+    const tableMap = {
+        'whatif_baseline': 'baseline',
+        'whatif_scenarios': 'scenarios',
+        'whatif_persone': 'persone',
+        'whatif_allocazioni': 'allocazioni',
+        'whatif_ruoli': 'ruoli',
+    };
+    const table = tableMap[localStorageKey];
+    if (!table) return false;
+
+    try {
+        const { count, error } = await supabase
+            .from(table)
+            .select('*', { count: 'exact', head: true })
+            .gt('updated_at', lastSync)
+            .neq('user_id', _userId || '');
+
+        if (error) return false;
+        return (count || 0) > 0;
+    } catch {
+        return false;
     }
 }
 
@@ -1123,6 +1177,56 @@ function _startPeriodicSync(userId) {
             console.warn('[SyncManager] Periodic sync failed:', err);
         });
     }, PERIODIC_SYNC_MS);
+}
+
+// ─── Supabase Realtime ──────────────────────────────────────
+
+const REALTIME_TABLES = ['baseline', 'scenarios', 'persone', 'allocazioni', 'ruoli'];
+let _realtimeDebounce = null;
+
+function _startRealtime(userId) {
+    if (_realtimeChannel) {
+        supabase.removeChannel(_realtimeChannel);
+        _realtimeChannel = null;
+    }
+
+    try {
+        _realtimeChannel = supabase.channel('sync-changes');
+
+        for (const table of REALTIME_TABLES) {
+            _realtimeChannel.on(
+                'postgres_changes',
+                { event: '*', schema: 'public', table },
+                (payload) => {
+                    // Ignore changes made by this user (already in localStorage)
+                    if (payload.new?.user_id === userId) return;
+
+                    console.info(`[Realtime] Change on ${table} by another user`);
+
+                    // Debounce: multiple changes often arrive in rapid succession
+                    if (_realtimeDebounce) clearTimeout(_realtimeDebounce);
+                    _realtimeDebounce = setTimeout(() => {
+                        _realtimeDebounce = null;
+                        if (!_syncing) {
+                            incrementalSync(userId).catch(err => {
+                                console.warn('[Realtime] Sync triggered by realtime failed:', err);
+                            });
+                        }
+                    }, 1000); // wait 1s to batch rapid changes
+                }
+            );
+        }
+
+        _realtimeChannel.subscribe((status) => {
+            if (status === 'SUBSCRIBED') {
+                console.info('[Realtime] Connected — listening for remote changes');
+            } else if (status === 'CHANNEL_ERROR') {
+                console.warn('[Realtime] Channel error — falling back to polling');
+            }
+        });
+    } catch (err) {
+        console.warn('[Realtime] Failed to start — falling back to polling:', err.message);
+    }
 }
 
 // ─── Offline queue ───────────────────────────────────────────
