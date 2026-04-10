@@ -313,17 +313,19 @@ export async function incrementalSync(userId) {
 
         // Detect if pull changed any data
         let dataChanged = false;
+        const changedKeys = [];
         for (const key of SYNC_KEYS) {
             const newHash = _hashString(localStorage.getItem(key) || '');
             if (newHash !== hashesBeforePull[key]) {
                 _hashes[key] = newHash;
                 dataChanged = true;
+                changedKeys.push(key);
             }
         }
 
         const serverNow = await _getServerTime();
         localStorage.setItem(LAST_SYNC_KEY, serverNow);
-        _setStatus({ state: 'connected', lastSync: serverNow, error: null, dataChanged });
+        _setStatus({ state: 'connected', lastSync: serverNow, error: null, dataChanged, changedKeys });
     } catch (err) {
         console.error('[SyncManager] incrementalSync error:', err);
         _setStatus({ state: 'error', error: err.message });
@@ -1280,6 +1282,7 @@ function _startPeriodicSync(userId) {
 
 const REALTIME_TABLES = ['baseline', 'scenarios', 'persone', 'allocazioni', 'ruoli'];
 let _realtimeDebounce = null;
+let _realtimePending = false; // tracks if a sync should run after current one finishes
 
 function _startRealtime(userId) {
     if (_realtimeChannel) {
@@ -1304,12 +1307,8 @@ function _startRealtime(userId) {
                     if (_realtimeDebounce) clearTimeout(_realtimeDebounce);
                     _realtimeDebounce = setTimeout(() => {
                         _realtimeDebounce = null;
-                        if (!_syncing) {
-                            incrementalSync(userId).catch(err => {
-                                console.warn('[Realtime] Sync triggered by realtime failed:', err);
-                            });
-                        }
-                    }, 1000); // wait 1s to batch rapid changes
+                        _triggerRealtimeSync(userId);
+                    }, 800); // wait 0.8s to batch rapid changes
                 }
             );
         }
@@ -1323,6 +1322,63 @@ function _startRealtime(userId) {
         });
     } catch (err) {
         console.warn('[Realtime] Failed to start — falling back to polling:', err.message);
+    }
+}
+
+/**
+ * Triggered by Realtime events. Uses fullPull instead of incrementalSync
+ * to bypass timestamp-based filtering issues. Handles concurrent calls
+ * by queuing a follow-up sync if one is already running.
+ */
+async function _triggerRealtimeSync(userId) {
+    if (_syncing) {
+        // A sync is already running. Mark that we need another one after.
+        _realtimePending = true;
+        return;
+    }
+
+    _syncing = true;
+    try {
+        // Snapshot before pull
+        const hashesBefore = {};
+        for (const key of SYNC_KEYS) {
+            hashesBefore[key] = _hashString(localStorage.getItem(key) || '');
+        }
+
+        // Use fullPull (no timestamp filtering) for max reliability
+        await _pullBaseline();
+        await _pullScenarios();
+        await _pullPersone();
+        await _pullAllocazioni();
+        _deduplicatePersone();
+        _deduplicateAllocazioni();
+        await _pullRuoli();
+        _deduplicateRuoli();
+
+        // Detect data change for UI refresh
+        let dataChanged = false;
+        const changedKeys = [];
+        for (const key of SYNC_KEYS) {
+            const newHash = _hashString(localStorage.getItem(key) || '');
+            if (newHash !== hashesBefore[key]) {
+                _hashes[key] = newHash;
+                dataChanged = true;
+                changedKeys.push(key);
+            }
+        }
+
+        const serverNow = await _getServerTime();
+        localStorage.setItem(LAST_SYNC_KEY, serverNow);
+        _setStatus({ state: 'connected', lastSync: serverNow, error: null, dataChanged, changedKeys });
+    } catch (err) {
+        console.warn('[Realtime] Sync failed:', err);
+    } finally {
+        _syncing = false;
+        // If another sync was requested while we were running, trigger it now
+        if (_realtimePending) {
+            _realtimePending = false;
+            setTimeout(() => _triggerRealtimeSync(userId), 100);
+        }
     }
 }
 

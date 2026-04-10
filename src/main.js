@@ -352,7 +352,7 @@ async function initCloudSync() {
             if (document.querySelector('.tab-btn.active')?.dataset.tab === 'risorse') {
                 renderResourceTab();
             }
-            _showSyncUpdateBanner();
+            _showSyncUpdateBanner(status.changedKeys || []);
         }
     });
 
@@ -391,16 +391,34 @@ async function initCloudSync() {
     });
 }
 
-function _showSyncUpdateBanner() {
-    // Don't show if already visible
-    if ($('#sync-update-banner')) return;
+function _showSyncUpdateBanner(changedKeys = []) {
+    // If already visible, just refresh the message
+    const existing = $('#sync-update-banner');
+    if (existing) existing.remove();
+
+    // Build informative message based on what changed
+    const labelMap = {
+        'whatif_baseline': 'commesse',
+        'whatif_scenarios': 'scenari',
+        'whatif_persone': 'persone',
+        'whatif_allocazioni': 'allocazioni',
+        'whatif_ruoli': 'ruoli',
+        'whatif_audit': null, // ignore audit
+    };
+    const labels = changedKeys.map(k => labelMap[k]).filter(Boolean);
+    const message = labels.length > 0
+        ? `Aggiornati: <strong>${labels.join(', ')}</strong>`
+        : 'Nuovi dati disponibili dal cloud';
 
     const banner = document.createElement('div');
     banner.id = 'sync-update-banner';
-    banner.style.cssText = 'position:fixed;bottom:16px;right:16px;background:var(--bg-card,#fff);border:1px solid var(--primary,#638cff);border-radius:8px;padding:10px 16px;font-size:12px;z-index:1200;box-shadow:0 4px 12px rgba(0,0,0,.15);display:flex;align-items:center;gap:10px;';
+    banner.style.cssText = 'position:fixed;bottom:16px;right:16px;background:var(--bg-card,#fff);border:1px solid var(--success, #22c55e);border-radius:8px;padding:10px 16px;font-size:12px;z-index:1200;box-shadow:0 4px 12px rgba(0,0,0,.15);display:flex;align-items:center;gap:10px;';
     banner.innerHTML = `
-        <span style="color:var(--text);">Nuovi dati disponibili dal cloud</span>
-        <button id="btn-sync-apply" style="background:var(--primary,#638cff);color:#fff;border:none;border-radius:4px;padding:4px 12px;font-size:11px;cursor:pointer;font-weight:600;">Aggiorna</button>
+        <span style="display:inline-flex;align-items:center;gap:6px;color:var(--text);">
+            <span style="width:8px;height:8px;border-radius:50%;background:var(--success, #22c55e);display:inline-block;"></span>
+            ${message}
+        </span>
+        <button id="btn-sync-apply" style="background:var(--primary,#638cff);color:#fff;border:none;border-radius:4px;padding:4px 12px;font-size:11px;cursor:pointer;font-weight:600;">Ricarica vista</button>
         <button id="btn-sync-dismiss" style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:14px;padding:0 4px;">&times;</button>
     `;
     document.body.appendChild(banner);
