@@ -348,6 +348,11 @@ async function initCloudSync() {
         }
         // Show a non-intrusive notification when remote data has changed
         if (status.dataChanged) {
+            // Refresh scenario dropdown (new/modified scenarios from cloud)
+            loadScenarioList();
+            if (activeScenarioId) {
+                $('#active-scenario-select').value = activeScenarioId;
+            }
             // Auto-refresh resource tab if it's currently active
             if (document.querySelector('.tab-btn.active')?.dataset.tab === 'risorse') {
                 renderResourceTab();
