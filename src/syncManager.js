@@ -1147,6 +1147,22 @@ function _deduplicateRuoli() {
     }
 }
 
+/**
+ * Direct push without conflict detection. Used by _triggerRealtimeSync
+ * to ensure local data reaches the cloud BEFORE fullPull replaces localStorage.
+ */
+async function _pushEntityDirect(localStorageKey, userId) {
+    if (!canWrite(localStorageKey) || !navigator.onLine) return;
+    switch (localStorageKey) {
+        case 'whatif_baseline': await _pushBaseline(userId); break;
+        case 'whatif_scenarios': await _pushScenarios(userId); break;
+        case 'whatif_persone': await _pushPersone(userId); break;
+        case 'whatif_allocazioni': await _pushAllocazioni(userId); break;
+        case 'whatif_audit': await _pushAudit(userId); break;
+        case 'whatif_ruoli': await _pushRuoli(userId); break;
+    }
+}
+
 // ─── Explicit deletion push (shared-safe) ──────────────────
 
 async function _pushExplicitDeletions(table, deletedKey) {
@@ -1339,13 +1355,23 @@ async function _triggerRealtimeSync(userId) {
 
     _syncing = true;
     try {
+        // STEP 1: Push local data to cloud FIRST (protect unpushed changes)
+        for (const key of SYNC_KEYS) {
+            if (!canWrite(key)) continue;
+            try {
+                await _pushEntityDirect(key, userId);
+            } catch (e) {
+                console.warn(`[Realtime] Pre-pull push ${key} failed (non-blocking):`, e.message);
+            }
+        }
+
         // Snapshot before pull
         const hashesBefore = {};
         for (const key of SYNC_KEYS) {
             hashesBefore[key] = _hashString(localStorage.getItem(key) || '');
         }
 
-        // Use fullPull (no timestamp filtering) for max reliability
+        // STEP 2: fullPull (no timestamp filtering) for max reliability
         await _pullBaseline();
         await _pullScenarios();
         await _pullPersone();
