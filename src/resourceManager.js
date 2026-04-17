@@ -5,6 +5,17 @@
  */
 
 import { trackDeletion } from './syncManager.js';
+import { getScenario } from './scenarioManager.js';
+
+/**
+ * Check if a scenario is locked. Returns true if locked.
+ * Baseline (scenarioId = null) is never locked.
+ */
+function _isScenarioLocked(scenarioId) {
+    if (!scenarioId) return false; // baseline never locked
+    const scen = getScenario(scenarioId);
+    return scen?.locked === true;
+}
 
 const RUOLI_KEY = 'whatif_ruoli';
 const PERSONE_KEY = 'whatif_persone';
@@ -259,6 +270,8 @@ export function saveAllocazione(data, origine = 'manuale') {
         // UPDATE
         const idx = all.findIndex(a => a.id === data.id);
         if (idx === -1) return null;
+        // Lock check: non modificare allocazioni di scenari bloccati
+        if (_isScenarioLocked(all[idx].scenarioId)) return { error: 'Lo scenario è bloccato. Sblocca o duplica per modificare.' };
         const old = { ...all[idx] };
         const updated = { ...all[idx], ...data, updatedAt: now };
         const err = _validateAllocazione(updated) || _validateSaturation(updated, all);
@@ -269,7 +282,10 @@ export function saveAllocazione(data, origine = 'manuale') {
         return updated;
     }
 
-    // CREATE
+    // CREATE — lock check on target scenario
+    const targetScenarioId = data.scenarioId !== undefined ? data.scenarioId : null;
+    if (_isScenarioLocked(targetScenarioId)) return { error: 'Lo scenario è bloccato. Sblocca o duplica per modificare.' };
+
     const nuova = {
         personaId: '', codiceCommessa: '', scenarioId: null,
         percentuale: 100, dataInizio: '', dataFine: '',
@@ -291,6 +307,9 @@ export function saveAllocazione(data, origine = 'manuale') {
 }
 
 export function deleteAllocazione(id) {
+    // Lock check
+    const alloc = getAllocazione(id);
+    if (alloc && _isScenarioLocked(alloc.scenarioId)) return { error: 'Lo scenario è bloccato. Sblocca o duplica per modificare.' };
     const all = listAllocazioni().filter(a => a.id !== id);
     localStorage.setItem(ALLOCAZIONI_KEY, JSON.stringify(all));
     trackDeletion('allocazione', id);
@@ -302,6 +321,8 @@ export function deleteAllocazione(id) {
  * Restituisce il numero di allocazioni copiate.
  */
 export function copyAllocazioniScenario(fromScenarioId, toScenarioId) {
+    // Lock check: target scenario must not be locked (reading from source is fine)
+    if (_isScenarioLocked(toScenarioId)) return { error: 'Lo scenario destinazione è bloccato.' };
     const src = listAllocazioni({ scenarioId: fromScenarioId });
     if (!src.length) return 0;
     const now = new Date().toISOString();
@@ -320,6 +341,8 @@ export function copyAllocazioniScenario(fromScenarioId, toScenarioId) {
 }
 
 export function deleteAllocazioniScenario(scenarioId) {
+    // Lock check
+    if (_isScenarioLocked(scenarioId)) return { error: 'Lo scenario è bloccato.' };
     const allAlloc = listAllocazioni();
     allAlloc.filter(a => a.scenarioId === scenarioId).forEach(a => trackDeletion('allocazione', a.id));
     const remaining = allAlloc.filter(a => a.scenarioId !== scenarioId);

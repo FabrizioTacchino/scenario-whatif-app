@@ -22,6 +22,7 @@ import {
     computeCostoPersonaleMensile,
 } from './resourceEngine.js';
 import { trackDeletion } from './syncManager.js';
+import { getScenario } from './scenarioManager.js';
 import { Chart } from 'chart.js';
 import ChartDataLabels from 'chartjs-plugin-datalabels';
 
@@ -41,6 +42,14 @@ function _restoreFocus() {
 
 // ─── Context (provided by main.js) ──────────────────────────
 let _ctx = null;
+
+/** Check if the active scenario is locked. Baseline (null) is never locked. */
+function _isActiveScenarioLocked() {
+    const sid = _ctx?.getActiveScenarioId?.();
+    if (!sid) return false; // baseline
+    const scen = getScenario(sid);
+    return scen?.locked === true;
+}
 
 /** Deriva lo stato attivo dalla dataTermine rispetto al mese corrente */
 function _isPersonaAttiva(p) {
@@ -618,14 +627,23 @@ function _renderPersone() {
         });
     });
     panel.querySelectorAll('.btn-add-alloc-from-person').forEach(btn => {
-        btn.addEventListener('click', e => { e.stopPropagation(); _openAllocModal(null, btn.dataset.personaId); });
+        btn.addEventListener('click', e => {
+            e.stopPropagation();
+            if (_isActiveScenarioLocked()) { alert('Scenario bloccato. Sblocca o duplica per modificare le allocazioni.'); return; }
+            _openAllocModal(null, btn.dataset.personaId);
+        });
     });
     panel.querySelectorAll('.btn-edit-alloc').forEach(btn => {
-        btn.addEventListener('click', e => { e.stopPropagation(); _openAllocModal(btn.dataset.id, null); });
+        btn.addEventListener('click', e => {
+            e.stopPropagation();
+            if (_isActiveScenarioLocked()) { alert('Scenario bloccato. Sblocca o duplica per modificare le allocazioni.'); return; }
+            _openAllocModal(btn.dataset.id, null);
+        });
     });
     panel.querySelectorAll('.btn-delete-alloc').forEach(btn => {
         btn.addEventListener('click', e => {
             e.stopPropagation();
+            if (_isActiveScenarioLocked()) { alert('Scenario bloccato. Sblocca o duplica per eliminare allocazioni.'); return; }
             if (!confirm('Eliminare questa allocazione?')) { _restoreFocus(); return; }
             trackDeletion('allocazione', btn.dataset.id);
             deleteAllocazione(btn.dataset.id);
@@ -904,15 +922,28 @@ function _renderPianificazione() {
         const inp = $('#res-filter-persona-search');
         if (inp) { inp.focus(); inp.setSelectionRange(pos, pos); }
     });
-    $('#btn-res-add-alloc')?.addEventListener('click', () => _openAllocModal(null, null));
-    $('#btn-res-copy-alloc')?.addEventListener('click', () => _openCopyAllocModal());
-    $('#btn-res-import-alloc')?.addEventListener('click', () => _openImportModal('allocazioni'));
+    $('#btn-res-add-alloc')?.addEventListener('click', () => {
+        if (_isActiveScenarioLocked()) { alert('Scenario bloccato. Sblocca o duplica per modificare le allocazioni.'); return; }
+        _openAllocModal(null, null);
+    });
+    $('#btn-res-copy-alloc')?.addEventListener('click', () => {
+        if (_isActiveScenarioLocked()) { alert('Scenario bloccato. Sblocca o duplica per modificare le allocazioni.'); return; }
+        _openCopyAllocModal();
+    });
+    $('#btn-res-import-alloc')?.addEventListener('click', () => {
+        if (_isActiveScenarioLocked()) { alert('Scenario bloccato. Sblocca o duplica per importare allocazioni.'); return; }
+        _openImportModal('allocazioni');
+    });
 
     panel.querySelectorAll('.btn-edit-alloc-plan').forEach(btn => {
-        btn.addEventListener('click', () => _openAllocModal(btn.dataset.id, null));
+        btn.addEventListener('click', () => {
+            if (_isActiveScenarioLocked()) { alert('Scenario bloccato. Sblocca o duplica per modificare le allocazioni.'); return; }
+            _openAllocModal(btn.dataset.id, null);
+        });
     });
     panel.querySelectorAll('.btn-delete-alloc-plan').forEach(btn => {
         btn.addEventListener('click', () => {
+            if (_isActiveScenarioLocked()) { alert('Scenario bloccato. Sblocca o duplica per eliminare allocazioni.'); return; }
             if (!confirm('Eliminare questa allocazione?')) { _restoreFocus(); return; }
             trackDeletion('allocazione', btn.dataset.id);
             deleteAllocazione(btn.dataset.id);
@@ -1332,6 +1363,7 @@ function _detectAllocazioniScoperte(allocazioni, commesse, persone) {
 }
 
 function _sincronizzaAllocazione(allocId) {
+    if (_isActiveScenarioLocked()) { alert('Scenario bloccato. Sblocca o duplica per sincronizzare le date.'); return; }
     const alloc = getAllocazione(allocId);
     if (!alloc) return;
     const eff = _ctx.getEffectiveCommessaDates(alloc.codiceCommessa);
@@ -1346,6 +1378,7 @@ function _sincronizzaAllocazione(allocId) {
 }
 
 function _sincronizzaTutto(problemi) {
+    if (_isActiveScenarioLocked()) { alert('Scenario bloccato. Sblocca o duplica per sincronizzare le date.'); return; }
     for (const { alloc, effDates, nuovaDi, nuovaDf } of problemi) {
         const update = { id: alloc.id };
         if (alloc.aggancioInizio && nuovaDi) update.dataInizio = nuovaDi;
@@ -2854,6 +2887,9 @@ function _saveAllocFromModal() {
     const note = $('#res-alloc-note').value.trim();
     const errEl = $('#res-alloc-error');
 
+    // Lock check
+    if (scenarioId && getScenario(scenarioId)?.locked) { errEl.textContent = 'Scenario bloccato. Sblocca o duplica per modificare.'; return; }
+
     if (!personaId) { errEl.textContent = 'Seleziona una persona'; return; }
     if (!codiceCommessa) { errEl.textContent = 'Seleziona una commessa'; return; }
     if (!percentuale || percentuale <= 0 || percentuale > 100) { errEl.textContent = 'Percentuale non valida (1–100)'; return; }
@@ -2918,6 +2954,7 @@ function _confirmCopyAlloc() {
     const toId = _resolveScenarioId();
     if (!fromId) { $('#res-copy-alloc-error').textContent = 'Seleziona lo scenario sorgente'; return; }
     if (fromId === toId) { $('#res-copy-alloc-error').textContent = 'Sorgente e destinazione coincidono'; return; }
+    if (toId && getScenario(toId)?.locked) { $('#res-copy-alloc-error').textContent = 'Lo scenario destinazione è bloccato.'; return; }
     if ($('#chk-copy-overwrite')?.checked) deleteAllocazioniScenario(toId);
     const n = copyAllocazioniScenario(fromId, toId);
     _closeModal('res-copy-alloc-modal');
@@ -3008,6 +3045,11 @@ function _confirmImport() {
     if (!_importData) return;
     const scenarioId = _resolveScenarioId();
     const commesse = _ctx.getCommesse();
+    // Lock check for allocation imports
+    if (_importTipo !== 'persone' && scenarioId && getScenario(scenarioId)?.locked) {
+        $('#res-import-result').innerHTML = '<span class="res-error-text">✗ Scenario bloccato. Sblocca o duplica per importare allocazioni.</span>';
+        return;
+    }
     let r;
     if (_importTipo === 'persone') {
         r = importPersoneFromRows(_importData);
