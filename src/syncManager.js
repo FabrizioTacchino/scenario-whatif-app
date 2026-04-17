@@ -438,6 +438,49 @@ async function _pushPersone(userId) {
 
     // Soft-delete only explicitly deleted persone
     await _pushExplicitDeletions('persone', DELETED_PERSONE_KEY);
+
+    // Cloud-side dedup persone by codice_fiscale or cognome+nome
+    await _dedupPersoneCloud();
+}
+
+async function _dedupPersoneCloud() {
+    try {
+        const { data, error } = await supabase
+            .from('persone')
+            .select('id, local_id, codice_fiscale, cognome, nome, updated_at')
+            .eq('deleted', false)
+            .order('updated_at', { ascending: false });
+
+        if (error || !data) return;
+
+        const seen = new Map();
+        const toDelete = [];
+
+        for (const row of data) {
+            const cf = (row.codice_fiscale || '').toUpperCase().trim();
+            const key = cf || `${(row.cognome || '').toUpperCase()}|${(row.nome || '').toLowerCase()}`;
+            if (!key || key === '|') continue;
+
+            if (seen.has(key)) {
+                toDelete.push(row.id);
+            } else {
+                seen.set(key, row.id);
+            }
+        }
+
+        if (toDelete.length === 0) return;
+        console.info(`[SyncManager] Cloud dedup: marking ${toDelete.length} duplicate persone as deleted`);
+
+        for (let i = 0; i < toDelete.length; i += 50) {
+            const batch = toDelete.slice(i, i + 50);
+            await supabase
+                .from('persone')
+                .update({ deleted: true, updated_at: new Date().toISOString() })
+                .in('id', batch);
+        }
+    } catch (err) {
+        console.warn('[SyncManager] Cloud dedup persone error:', err.message);
+    }
 }
 
 async function _pushAllocazioni(userId) {
@@ -479,6 +522,79 @@ async function _pushAllocazioni(userId) {
 
     // Soft-delete only explicitly deleted allocazioni
     await _pushExplicitDeletions('allocazioni', DELETED_ALLOCAZIONI_KEY);
+
+    // Cloud-side dedup: remove duplicate allocazioni by content
+    // Keeps the most recent row per group (persona+commessa+scenario+%+dates)
+    await _dedupAllocazioniCloud();
+}
+
+/**
+ * Cloud-side deduplication of allocazioni.
+ * Groups by (persona_local_id, codice_commessa, scenario_local_id, percentuale, data_inizio, data_fine).
+ * Within each group, marks all but the most recent (by updated_at) as deleted=true.
+ * Runs as a single SQL query server-side — safe, idempotent, soft-delete only.
+ */
+async function _dedupAllocazioniCloud() {
+    try {
+        const { error } = await supabase.rpc('dedup_allocazioni');
+        if (error) {
+            // If RPC doesn't exist yet, use fallback approach
+            if (error.message.includes('dedup_allocazioni')) {
+                await _dedupAllocazioniCloudFallback();
+            } else {
+                console.warn('[SyncManager] Cloud dedup allocazioni failed:', error.message);
+            }
+        }
+    } catch (err) {
+        console.warn('[SyncManager] Cloud dedup allocazioni error:', err.message);
+    }
+}
+
+/**
+ * Fallback cloud dedup: fetch duplicates, then mark old ones as deleted.
+ * Used when the RPC function doesn't exist on the database.
+ */
+async function _dedupAllocazioniCloudFallback() {
+    try {
+        // Step 1: find all duplicate groups
+        const { data, error } = await supabase
+            .from('allocazioni')
+            .select('id, local_id, persona_local_id, codice_commessa, scenario_local_id, percentuale, data_inizio, data_fine, updated_at')
+            .eq('deleted', false)
+            .order('updated_at', { ascending: false });
+
+        if (error || !data) return;
+
+        // Step 2: group by content key, keep most recent
+        const seen = new Map();
+        const toDelete = [];
+
+        for (const row of data) {
+            const key = `${row.persona_local_id}|${row.codice_commessa}|${row.scenario_local_id}|${row.percentuale}|${row.data_inizio}|${row.data_fine}`;
+            if (seen.has(key)) {
+                // This row is older (data is ordered by updated_at DESC), mark for deletion
+                toDelete.push(row.id);
+            } else {
+                seen.set(key, row.id);
+            }
+        }
+
+        if (toDelete.length === 0) return;
+
+        console.info(`[SyncManager] Cloud dedup: marking ${toDelete.length} duplicate allocazioni as deleted`);
+
+        // Step 3: soft-delete in batches of 50
+        for (let i = 0; i < toDelete.length; i += 50) {
+            const batch = toDelete.slice(i, i + 50);
+            const { error: delErr } = await supabase
+                .from('allocazioni')
+                .update({ deleted: true, updated_at: new Date().toISOString() })
+                .in('id', batch);
+            if (delErr) console.warn('[SyncManager] Cloud dedup batch error:', delErr.message);
+        }
+    } catch (err) {
+        console.warn('[SyncManager] Cloud dedup fallback error:', err.message);
+    }
 }
 
 async function _pushRuoli(userId) {
@@ -508,6 +624,47 @@ async function _pushRuoli(userId) {
 
     // Soft-delete only explicitly deleted ruoli (by id AND by name to handle cloud duplicates)
     await _pushRuoliDeletions();
+
+    // Cloud-side dedup ruoli by nome
+    await _dedupRuoliCloud();
+}
+
+async function _dedupRuoliCloud() {
+    try {
+        const { data, error } = await supabase
+            .from('ruoli')
+            .select('id, local_id, nome, updated_at')
+            .eq('deleted', false)
+            .order('updated_at', { ascending: false });
+
+        if (error || !data) return;
+
+        const seen = new Map();
+        const toDelete = [];
+
+        for (const row of data) {
+            const key = (row.nome || '').toLowerCase().trim();
+            if (!key) continue;
+            if (seen.has(key)) {
+                toDelete.push(row.id);
+            } else {
+                seen.set(key, row.id);
+            }
+        }
+
+        if (toDelete.length === 0) return;
+        console.info(`[SyncManager] Cloud dedup: marking ${toDelete.length} duplicate ruoli as deleted`);
+
+        for (let i = 0; i < toDelete.length; i += 50) {
+            const batch = toDelete.slice(i, i + 50);
+            await supabase
+                .from('ruoli')
+                .update({ deleted: true, updated_at: new Date().toISOString() })
+                .in('id', batch);
+        }
+    } catch (err) {
+        console.warn('[SyncManager] Cloud dedup ruoli error:', err.message);
+    }
 }
 
 async function _pushRuoliDeletions() {
