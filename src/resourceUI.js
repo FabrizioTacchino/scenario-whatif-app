@@ -1039,7 +1039,11 @@ function _renderCommessaDetail(scenarioId, commesse, selectedCommesse = [], date
             const p = persone.find(x => x.id === a.personaId);
             if (!p) { rowData.push({ missing: true, personaId: a.personaId }); continue; }
             const { di: effDi, df: effDf } = _effDates(a);
-            const months = _filteredMonths(effDi || a.dataInizio, effDf || a.dataFine);
+            // Limita al periodo contrattuale della persona (come fa computeResourceMatrix)
+            const assunzione = p.dataAssunzione ? p.dataAssunzione.slice(0, 7) : null;
+            const termine = p.dataTermine ? p.dataTermine.slice(0, 7) : null;
+            const months = _filteredMonths(effDi || a.dataInizio, effDf || a.dataFine)
+                .filter(m => (!assunzione || m >= assunzione) && (!termine || m <= termine));
             const mesi = months.length;
             if (mesi === 0) continue;
             const costoMese = (p.costoMedioMese || 0) * a.percentuale / 100;
