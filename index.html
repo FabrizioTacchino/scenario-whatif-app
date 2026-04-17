@@ -1407,6 +1407,14 @@
           <div id="cloud-admin-panel" class="hidden" style="margin-top:16px;border-top:1px solid var(--border);padding-top:12px;">
             <p style="font-weight:600;font-size:13px;margin-bottom:8px;">Gestione Utenti</p>
             <div id="cloud-users-list" style="max-height:200px;overflow-y:auto;"></div>
+            <div style="margin-top:14px;border-top:1px solid var(--border);padding-top:10px;">
+              <p style="font-weight:600;font-size:13px;margin-bottom:6px;">Versione minima app</p>
+              <div style="display:flex;gap:8px;align-items:center;">
+                <input type="text" id="admin-min-version" style="flex:1;padding:4px 8px;font-size:12px;border:1px solid var(--border);border-radius:4px;background:var(--bg-2);color:var(--text);" placeholder="es. 1.0.72" />
+                <button id="btn-save-min-version" class="btn btn-outline btn-sm" style="font-size:11px;">Salva</button>
+              </div>
+              <p style="font-size:10px;color:var(--text-muted);margin-top:4px;">Le app con versione inferiore non potranno pushare dati.</p>
+            </div>
           </div>
           <button id="btn-cloud-logout" class="btn btn-ghost btn-sm" style="width:100%;margin-top:12px;color:var(--danger);">
             Disconnetti

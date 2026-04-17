@@ -512,6 +512,7 @@ function setupCloudAuth() {
             if (_currentUserRole === 'admin') {
                 $('#cloud-admin-panel')?.classList.remove('hidden');
                 _loadAdminUserList();
+                _loadMinVersion();
             } else {
                 $('#cloud-admin-panel')?.classList.add('hidden');
             }
@@ -844,6 +845,39 @@ async function _loadAdminUserList() {
         container.innerHTML = '<p style="font-size:11px;color:var(--danger);">Errore caricamento utenti</p>';
     }
 }
+
+async function _loadMinVersion() {
+    const input = $('#admin-min-version');
+    if (!input) return;
+    try {
+        const { data } = await supabase
+            .from('app_config')
+            .select('value')
+            .eq('key', 'min_push_version')
+            .maybeSingle();
+        if (data) input.value = data.value;
+    } catch (err) {
+        console.warn('Failed to load min version:', err);
+    }
+}
+
+$('#btn-save-min-version')?.addEventListener('click', async () => {
+    const input = $('#admin-min-version');
+    const version = input?.value?.trim();
+    if (!version || !/^\d+\.\d+\.\d+$/.test(version)) {
+        alert('Formato versione non valido. Usa il formato X.Y.Z (es. 1.0.72)');
+        return;
+    }
+    try {
+        const { error } = await supabase
+            .from('app_config')
+            .upsert({ key: 'min_push_version', value: version, updated_at: new Date().toISOString() }, { onConflict: 'key' });
+        if (error) throw error;
+        alert(`Versione minima aggiornata a ${version}.\nLe app con versione inferiore non potranno pushare.`);
+    } catch (err) {
+        alert('Errore nel salvataggio: ' + err.message);
+    }
+});
 
 function _translateAuthError(msg) {
     if (msg.includes('Invalid login')) return 'Email o password non validi.';
