@@ -50,6 +50,8 @@ let _userEmail = null;
 let _userId = null;
 let _onlineUsers = []; // { email, role, joinedAt }
 let _presenceListeners = [];
+let _pushBlocked = false; // true if app version is too old
+let _appVersion = null;
 let _status = { state: 'disconnected', lastSync: null, pending: 0, error: null };
 let _listeners = [];
 
@@ -87,6 +89,9 @@ export async function initSync() {
         const userId = session.user.id;
         _userEmail = session.user.email || '';
         _userRole = await getUserRole();
+
+        // Check minimum version required for push
+        await _checkMinVersion();
 
         const cloudHasData = await _cloudHasData();
         const localHasData = _localHasData();
@@ -163,6 +168,50 @@ export function onPresenceChange(callback) {
 }
 
 /**
+ * Check if the current app version meets the minimum required for pushing.
+ * If not, blocks all push operations and shows a warning.
+ */
+async function _checkMinVersion() {
+    try {
+        // Get app version from package.json (injected by Vite at build time)
+        _appVersion = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : null;
+
+        const { data, error } = await supabase
+            .from('app_config')
+            .select('value')
+            .eq('key', 'min_push_version')
+            .maybeSingle();
+
+        if (error || !data) return; // if table doesn't exist, don't block
+
+        const minVersion = data.value;
+        if (_appVersion && _compareVersions(_appVersion, minVersion) < 0) {
+            _pushBlocked = true;
+            console.warn(`[SyncManager] Push blocked: app version ${_appVersion} < minimum ${minVersion}. Update required.`);
+            // Notify UI
+            _setStatus({ state: 'connected', pushBlocked: true, minVersion });
+        }
+    } catch (err) {
+        console.warn('[SyncManager] Version check failed (non-blocking):', err.message);
+    }
+}
+
+/**
+ * Compare two semver strings. Returns -1, 0, or 1.
+ */
+function _compareVersions(a, b) {
+    const pa = a.split('.').map(Number);
+    const pb = b.split('.').map(Number);
+    for (let i = 0; i < 3; i++) {
+        const va = pa[i] || 0;
+        const vb = pb[i] || 0;
+        if (va < vb) return -1;
+        if (va > vb) return 1;
+    }
+    return 0;
+}
+
+/**
  * Track an explicit deletion so it can be pushed to cloud.
  * Call this when the user deletes a scenario/persona/allocazione locally.
  */
@@ -223,6 +272,11 @@ export async function fullPush(userId) {
         const session = await getSession();
         if (!session) throw new Error('Not authenticated');
         userId = session.user.id;
+    }
+
+    // Version gate: block push if app is too old
+    if (_pushBlocked) {
+        throw new Error('Versione dell\'app troppo vecchia. Aggiorna per poter modificare i dati.');
     }
 
     // Role gating: viewers cannot push
@@ -1309,6 +1363,7 @@ function _deduplicateRuoli() {
  * to ensure local data reaches the cloud BEFORE fullPull replaces localStorage.
  */
 async function _pushEntityDirect(localStorageKey, userId) {
+    if (_pushBlocked) return;
     if (!canWrite(localStorageKey) || !navigator.onLine) return;
     switch (localStorageKey) {
         case 'whatif_baseline': await _pushBaseline(userId); break;
@@ -1346,6 +1401,9 @@ async function _pushExplicitDeletions(table, deletedKey) {
 // ─── Generic push entity (for polling) ──────────────────────
 
 async function _pushEntity(localStorageKey, userId) {
+    // Version gate: block push if app is too old
+    if (_pushBlocked) return;
+
     // Role-based gating: check per-entity permissions
     if (!canWrite(localStorageKey)) return;
 

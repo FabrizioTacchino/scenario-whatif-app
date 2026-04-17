@@ -347,6 +347,15 @@ async function initCloudSync() {
             lastSyncEl.textContent = new Date(status.lastSync).toLocaleTimeString('it-IT');
         }
         // Show a non-intrusive notification when remote data has changed
+        // Show persistent warning if app version is too old to push
+        if (status.pushBlocked && !$('#version-blocked-banner')) {
+            const vb = document.createElement('div');
+            vb.id = 'version-blocked-banner';
+            vb.style.cssText = 'position:fixed;top:0;left:0;right:0;background:var(--danger,#ef4444);color:#fff;text-align:center;padding:8px 16px;font-size:13px;font-weight:600;z-index:9999;';
+            vb.textContent = `⚠ Versione dell'app troppo vecchia (minimo richiesto: ${status.minVersion}). Le tue modifiche NON verranno salvate. Aggiorna l'app.`;
+            document.body.prepend(vb);
+        }
+
         if (status.dataChanged) {
             // Refresh scenario dropdown (new/modified scenarios from cloud)
             loadScenarioList();
