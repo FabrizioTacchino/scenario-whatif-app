@@ -875,12 +875,26 @@ async function _pullPersone() {
 }
 
 async function _pullAllocazioni() {
-    const { data, error } = await supabase
-        .from('allocazioni')
-        .select('*')
-        .eq('deleted', false);
-
-    if (error) throw new Error(`Pull allocazioni failed: ${error.message}`);
+    // Paginazione: Supabase di default limita a 1000 righe per query.
+    // Senza paginazione, scenari oltre la soglia vengono "tagliati fuori"
+    // e le loro allocazioni non arrivano mai nel localStorage.
+    const PAGE_SIZE = 1000;
+    let allRows = [];
+    let fromIdx = 0;
+    while (true) {
+        const { data, error } = await supabase
+            .from('allocazioni')
+            .select('*')
+            .eq('deleted', false)
+            .order('id', { ascending: true })
+            .range(fromIdx, fromIdx + PAGE_SIZE - 1);
+        if (error) throw new Error(`Pull allocazioni failed: ${error.message}`);
+        if (!data || data.length === 0) break;
+        allRows = allRows.concat(data);
+        if (data.length < PAGE_SIZE) break;
+        fromIdx += PAGE_SIZE;
+    }
+    const data = allRows;
     if (data && data.length > 0) {
         const allocazioni = data.map(row => ({
             id: row.local_id,
@@ -1099,11 +1113,22 @@ async function _pullIfNewer(since) {
         localStorage.setItem('whatif_persone', JSON.stringify(localPersone));
     }
 
-    // Allocazioni
-    const { data: al } = await supabase
-        .from('allocazioni')
-        .select('*')
-        .gt('updated_at', since);
+    // Allocazioni (paginato: oltre 1000 righe il default Supabase tronca)
+    const PAGE_SIZE_AL = 1000;
+    let al = [];
+    let fromIdxAl = 0;
+    while (true) {
+        const { data: page } = await supabase
+            .from('allocazioni')
+            .select('*')
+            .gt('updated_at', since)
+            .order('id', { ascending: true })
+            .range(fromIdxAl, fromIdxAl + PAGE_SIZE_AL - 1);
+        if (!page || page.length === 0) break;
+        al = al.concat(page);
+        if (page.length < PAGE_SIZE_AL) break;
+        fromIdxAl += PAGE_SIZE_AL;
+    }
 
     if (al && al.length > 0) {
         const raw = localStorage.getItem('whatif_allocazioni');
@@ -1820,6 +1845,46 @@ export async function pushSingleScenario(localId, scenarioData) {
         .update({ data: scenarioData, updated_at: new Date().toISOString() })
         .eq('local_id', localId);
     if (error) throw new Error(`Push scenario update failed: ${error.message}`);
+}
+
+/**
+ * Soft-delete cloud-side di TUTTE le allocazioni di uno scenario,
+ * indipendentemente da quali sono in localStorage. Necessario per
+ * "Sovrascrivi" multi-utente: senza questo, vengono cancellate solo
+ * le allocazioni nel localStorage del chiamante (post-dedup), e quelle
+ * di altri utenti restano nel cloud.
+ */
+export async function deleteAllocazioniScenarioCloud(scenarioId) {
+    if (_pushBlocked) throw new Error('Versione dell\'app troppo vecchia. Aggiorna per poter modificare i dati.');
+    if (!canWrite('whatif_allocazioni')) return;
+    if (!navigator.onLine) throw new Error('Offline: impossibile sincronizzare.');
+    if (!scenarioId) return;
+    const { error } = await supabase
+        .from('allocazioni')
+        .update({ deleted: true, updated_at: new Date().toISOString() })
+        .eq('scenario_local_id', scenarioId)
+        .eq('deleted', false);
+    if (error) throw new Error(`Cancellazione allocazioni cloud fallita: ${error.message}`);
+}
+
+/**
+ * Push sincrono delle allocazioni: upsert + soft-delete + dedup.
+ * Da usare dopo operazioni che NON tollerano la latenza del polling
+ * (es. "Copia da scenario"): senza questo, l'utente potrebbe chiudere
+ * l'app prima del push automatico (ogni 2s) e perdere le modifiche.
+ * Aggiorna anche l'hash così il polling non rilancia un push duplicato.
+ */
+export async function pushAllocazioniNow() {
+    if (_pushBlocked) throw new Error('Versione dell\'app troppo vecchia. Aggiorna per poter modificare i dati.');
+    if (!canWrite('whatif_allocazioni')) return;
+    if (!navigator.onLine) throw new Error('Offline: impossibile sincronizzare.');
+    const session = await getSession();
+    if (!session) throw new Error('Not authenticated');
+    const userId = session.user.id;
+    await _pushAllocazioni(userId);
+    _hashes['whatif_allocazioni'] = _hashString(localStorage.getItem('whatif_allocazioni') || '');
+    const serverNow = await _getServerTime();
+    localStorage.setItem(LAST_SYNC_KEY, serverNow);
 }
 
 function _backupLocal() {

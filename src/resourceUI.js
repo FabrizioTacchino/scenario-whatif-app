@@ -21,8 +21,8 @@ import {
     computeCostoPersonaleTotale,
     computeCostoPersonaleMensile,
 } from './resourceEngine.js';
-import { trackDeletion } from './syncManager.js';
-import { getScenario } from './scenarioManager.js';
+import { trackDeletion, pushAllocazioniNow, deleteAllocazioniScenarioCloud, canWrite } from './syncManager.js';
+import { getScenario, listScenarios } from './scenarioManager.js';
 import { Chart } from 'chart.js';
 import ChartDataLabels from 'chartjs-plugin-datalabels';
 
@@ -333,6 +333,18 @@ function _renderRuoli() {
             const costoMedio = Number(tr.querySelector('.res-ruolo-edit-costo').value) || 0;
             const personeRuolo = listPersone().filter(p => p.ruolo?.toLowerCase() === nome.toLowerCase());
             if (!personeRuolo.length) return;
+
+            const impactedIds = new Set(personeRuolo.map(p => p.id));
+            const allocs = listAllocazioni();
+            const impactedLockedScen = listScenarios()
+                .filter(s => s.locked)
+                .filter(s => allocs.some(a => a.scenarioId === s.id && impactedIds.has(a.personaId)));
+            if (impactedLockedScen.length) {
+                const names = impactedLockedScen.map(s => `"${s.name}"`).join(', ');
+                const plural = impactedLockedScen.length === 1 ? 'o scenario bloccato' : 'i scenari bloccati';
+                if (!confirm(`Attenzione: questa modifica aggiornerà i KPI di ${impactedLockedScen.length} ${plural} (${names}). Procedere?`)) return;
+            }
+
             if (!confirm(`Aggiornare il costo di ${personeRuolo.length} person${personeRuolo.length === 1 ? 'a' : 'e'} con ruolo "${nome}" a ${formatEuro(costoMedio)}?`)) return;
             for (const p of personeRuolo) {
                 savePersona({ id: p.id, costoMedioMese: costoMedio }, 'aggiornamento_costo_ruolo');
@@ -796,6 +808,11 @@ function _renderPianificazione() {
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
                     Importa
                 </button>
+                ${allocazioni.length > 0 ? `
+                <button id="btn-res-clear-alloc" class="btn btn-sm" title="Elimina tutte le allocazioni di questo scenario" style="background:var(--danger,#ef4444);color:#fff;border:1px solid var(--danger,#ef4444);">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+                    Pulisci tutto
+                </button>` : ''}
             </div>
         </div>
 
@@ -933,6 +950,29 @@ function _renderPianificazione() {
     $('#btn-res-import-alloc')?.addEventListener('click', () => {
         if (_isActiveScenarioLocked()) { alert('Scenario bloccato. Sblocca o duplica per importare allocazioni.'); return; }
         _openImportModal('allocazioni');
+    });
+    $('#btn-res-clear-alloc')?.addEventListener('click', async () => {
+        if (_isActiveScenarioLocked()) { alert('Scenario bloccato. Sblocca o duplica per eliminare allocazioni.'); return; }
+        const sId = _resolveScenarioId();
+        if (!sId) { alert('Nessuno scenario attivo.'); return; }
+        const n = listAllocazioni({ scenarioId: sId }).length;
+        if (n === 0) return;
+        const scenName = _ctx.getActiveScenarioName ? _ctx.getActiveScenarioName() : 'lo scenario corrente';
+        if (!confirm(`Eliminare TUTTE le ${n} allocazioni di "${scenName}"?\n\nL'azione cancella anche le allocazioni di altri utenti su questo scenario nel cloud. È irreversibile (soft-delete: i dati restano in archivio per recupero amministrativo).`)) { _restoreFocus(); return; }
+        const btn = $('#btn-res-clear-alloc');
+        const originalText = btn?.innerHTML;
+        if (btn) { btn.disabled = true; btn.textContent = 'Pulizia in corso...'; }
+        try {
+            const delRes = deleteAllocazioniScenario(sId);
+            if (delRes && delRes.error) throw new Error(delRes.error);
+            await deleteAllocazioniScenarioCloud(sId);
+            await pushAllocazioniNow();
+            _renderPianificazione();
+            _showToast(`${n} allocazioni eliminate — sincronizzate`);
+        } catch (err) {
+            if (btn) { btn.disabled = false; btn.innerHTML = originalText; }
+            alert(`Pulizia fallita: ${err.message}\nLa pulizia locale è stata fatta ma la sincronizzazione cloud è fallita — riprova prima di chiudere l'app.`);
+        }
     });
 
     panel.querySelectorAll('.btn-edit-alloc-plan').forEach(btn => {
@@ -1311,9 +1351,34 @@ function _saveRenameCommessa() {
 // ─── RILEVAMENTO ALLOCAZIONI SCOPERTE ────────────────────────
 
 /**
+ * Calcola se sincronizzare un'allocazione causerebbe sovrasaturazione (>100%/mese).
+ * Replica la logica di _validateSaturation lato resourceManager: se la simulazione
+ * dell'update fallirebbe il save, ritorna il messaggio specifico (es. mese e %),
+ * così possiamo mostrarlo nel banner senza far cliccare l'utente "a vuoto".
+ */
+function _calcolaConflittoSaturazione(alloc, nuovaDi, nuovaDf, allAllocazioni) {
+    const dataInizio = nuovaDi || alloc.dataInizio;
+    const dataFine = nuovaDf || alloc.dataFine;
+    if (!dataInizio || !dataFine) return null;
+    if (dataInizio > dataFine) return `Data inizio (${formatYM(dataInizio)}) > data fine (${formatYM(dataFine)}) dopo sincronizzazione`;
+    const mesi = getMonthsInRange(dataInizio, dataFine);
+    for (const mese of mesi) {
+        const totale = allAllocazioni
+            .filter(a => a.id !== alloc.id && a.personaId === alloc.personaId && a.scenarioId === alloc.scenarioId)
+            .filter(a => a.dataInizio && a.dataFine && isMonthInRange(mese, a.dataInizio, a.dataFine))
+            .reduce((s, a) => s + (a.percentuale || 0), 0);
+        if (totale + (alloc.percentuale || 0) > 100) {
+            return `Sovrasaturazione ${totale + (alloc.percentuale || 0)}% nel mese ${formatYM(mese)} (occupato ${totale}% + ${alloc.percentuale || 0}%)`;
+        }
+    }
+    return null;
+}
+
+/**
  * Trova allocazioni che non coprono più le date effettive della commessa nello scenario.
- * Restituisce array di { alloc, persona, commessa, effDates, tipoProblema }
+ * Restituisce array di { alloc, persona, commessa, effDates, tipoProblema, bloccoMotivo }
  * tipoProblema: 'inizio_posticipato' | 'fine_posticipata' | 'entrambi'
+ * bloccoMotivo: stringa se la sincronizzazione automatica fallirebbe (sovrasaturazione, ecc.), null altrimenti
  */
 function _detectAllocazioniScoperte(allocazioni, commesse, persone) {
     const problemi = [];
@@ -1357,12 +1422,17 @@ function _detectAllocazioniScoperte(allocazioni, commesse, persone) {
             tipoProblema: inizioScoperto && fineScoperta ? 'entrambi'
                 : inizioScoperto ? 'inizio_posticipato'
                 : 'fine_posticipata',
+            bloccoMotivo: _calcolaConflittoSaturazione(alloc, nuovaDi, nuovaDf, allocazioni),
         });
     }
     return problemi;
 }
 
-function _sincronizzaAllocazione(allocId) {
+async function _sincronizzaAllocazione(allocId) {
+    if (!canWrite('whatif_allocazioni')) {
+        alert('Non hai i permessi per modificare le allocazioni. Chiedi a un editor o admin di sincronizzare le date.');
+        return;
+    }
     if (_isActiveScenarioLocked()) { alert('Scenario bloccato. Sblocca o duplica per sincronizzare le date.'); return; }
     const alloc = getAllocazione(allocId);
     if (!alloc) return;
@@ -1375,23 +1445,50 @@ function _sincronizzaAllocazione(allocId) {
         update.dataFine = addMonths(eff.dataFine, alloc.deltaFine || 0);
     saveAllocazione(update);
     _renderSubTab(_currentSubTab);
+    try {
+        await pushAllocazioniNow();
+    } catch (err) {
+        alert(`Modifica salvata in locale ma sincronizzazione cloud fallita: ${err.message}\nRiprova prima di chiudere l'app.`);
+    }
 }
 
-function _sincronizzaTutto(problemi) {
+async function _sincronizzaTutto(problemi) {
+    if (!canWrite('whatif_allocazioni')) {
+        alert('Non hai i permessi per modificare le allocazioni. Chiedi a un editor o admin di sincronizzare le date.');
+        return;
+    }
     if (_isActiveScenarioLocked()) { alert('Scenario bloccato. Sblocca o duplica per sincronizzare le date.'); return; }
-    for (const { alloc, effDates, nuovaDi, nuovaDf } of problemi) {
+    let ok = 0;
+    let bloccate = 0;
+    for (const { alloc, nuovaDi, nuovaDf } of problemi) {
         const update = { id: alloc.id };
         if (alloc.aggancioInizio && nuovaDi) update.dataInizio = nuovaDi;
         if (alloc.aggancioFine   && nuovaDf) update.dataFine   = nuovaDf;
-        saveAllocazione(update);
+        const res = saveAllocazione(update);
+        if (res && res.error) bloccate++;
+        else ok++;
     }
     _renderSubTab(_currentSubTab);
-    _showToast(`${problemi.length} allocazioni sincronizzate`);
+    if (ok > 0) {
+        try {
+            await pushAllocazioniNow();
+        } catch (err) {
+            alert(`Allocazioni aggiornate in locale ma sincronizzazione cloud fallita: ${err.message}\nRiprova prima di chiudere l'app.`);
+            return;
+        }
+    }
+    if (bloccate === 0) {
+        _showToast(`${ok} allocazioni sincronizzate`);
+    } else {
+        _showToast(`${ok} sincronizzate · ${bloccate} richiedono intervento manuale (sovrasaturazione)`);
+    }
 }
 
 function _buildScoperteBanner(problemi) {
     if (!problemi.length) return '';
-    const rows = problemi.map(({ alloc, persona, commessa, nuovaDi, nuovaDf, tipoProblema }) => {
+    const userCanWrite = canWrite('whatif_allocazioni');
+    const bloccateCount = problemi.filter(p => p.bloccoMotivo).length;
+    const rows = problemi.map(({ alloc, persona, commessa, nuovaDi, nuovaDf, tipoProblema, bloccoMotivo }) => {
         const nomePers = persona ? `${persona.cognome} ${persona.nome}` : alloc.personaId;
         const nomeComm = commessa ? `${alloc.codiceCommessa} — ${commessa.nome}` : alloc.codiceCommessa;
         const fmtDelta = (delta) => delta ? ` (Δ${delta > 0 ? '+' : ''}${delta}m)` : '';
@@ -1400,23 +1497,40 @@ function _buildScoperteBanner(problemi) {
             : tipoProblema === 'inizio_posticipato'
             ? `Inizio: ${formatYM(alloc.dataInizio)} → ${formatYM(nuovaDi)}${fmtDelta(alloc.deltaInizio)}`
             : `Fine: ${formatYM(alloc.dataFine)} → ${formatYM(nuovaDf)}${fmtDelta(alloc.deltaFine)}`;
+        const bloccoHtml = bloccoMotivo
+            ? `<div style="color:var(--danger,#ef4444);font-size:.72rem;margin-top:3px;font-weight:600;">⚠ ${bloccoMotivo} — sistemare manualmente</div>`
+            : '';
+        let buttonHtml;
+        if (!userCanWrite) {
+            buttonHtml = `<button class="btn btn-sm btn-outline" disabled title="Permessi insufficienti — chiedi a un editor" style="white-space:nowrap;opacity:0.5;cursor:not-allowed;">Sincronizza</button>`;
+        } else if (bloccoMotivo) {
+            buttonHtml = `<button class="btn btn-sm btn-outline" disabled title="${bloccoMotivo}" style="white-space:nowrap;opacity:0.5;cursor:not-allowed;">Sincronizza</button>`;
+        } else {
+            buttonHtml = `<button class="btn btn-sm btn-outline btn-sync-one" data-id="${alloc.id}" style="white-space:nowrap;">Sincronizza</button>`;
+        }
         return `
             <tr>
                 <td>${nomePers}</td>
                 <td>${nomeComm}</td>
-                <td class="text-muted" style="font-size:.78rem;">${descrizione}</td>
-                <td><button class="btn btn-sm btn-outline btn-sync-one" data-id="${alloc.id}" style="white-space:nowrap;">Sincronizza</button></td>
+                <td class="text-muted" style="font-size:.78rem;">${descrizione}${bloccoHtml}</td>
+                <td>${buttonHtml}</td>
             </tr>`;
     }).join('');
 
+    const headerExtra = bloccateCount > 0
+        ? ` <span style="color:var(--danger,#ef4444);font-weight:600;">(di cui ${bloccateCount} con sovrasaturazione: sistemare manualmente)</span>`
+        : '';
+    const headerAction = userCanWrite
+        ? `<button class="btn btn-sm btn-primary btn-sync-all">Sincronizza tutto</button>`
+        : `<span style="font-size:.78rem;color:var(--text-muted,#888);font-style:italic;">Non hai i permessi per sincronizzare — chiedi a un editor.</span>`;
     return `
         <div class="res-scoperte-banner">
             <div class="res-scoperte-header">
                 <span class="res-scoperte-title">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-                    ${problemi.length} allocazioni non allineate con lo scenario
+                    ${problemi.length} allocazioni non allineate con lo scenario${headerExtra}
                 </span>
-                <button class="btn btn-sm btn-primary btn-sync-all">Sincronizza tutto</button>
+                ${headerAction}
             </div>
             <div class="table-container" style="margin-top:8px;">
                 <table class="res-table" style="font-size:.8rem;">
@@ -2949,17 +3063,40 @@ function _openCopyAllocModal() {
     _openModal('res-copy-alloc-modal');
 }
 
-function _confirmCopyAlloc() {
+async function _confirmCopyAlloc() {
     const fromId = $('#res-copy-from-sel')?.value;
     const toId = _resolveScenarioId();
     if (!fromId) { $('#res-copy-alloc-error').textContent = 'Seleziona lo scenario sorgente'; return; }
     if (fromId === toId) { $('#res-copy-alloc-error').textContent = 'Sorgente e destinazione coincidono'; return; }
     if (toId && getScenario(toId)?.locked) { $('#res-copy-alloc-error').textContent = 'Lo scenario destinazione è bloccato.'; return; }
-    if ($('#chk-copy-overwrite')?.checked) deleteAllocazioniScenario(toId);
-    const n = copyAllocazioniScenario(fromId, toId);
-    _closeModal('res-copy-alloc-modal');
-    _renderSubTab(_currentSubTab);
-    _showToast(`Copiate ${n} allocazioni`);
+
+    const btn = $('#btn-res-copy-confirm');
+    const originalText = btn?.textContent;
+    if (btn) { btn.disabled = true; btn.textContent = 'Sincronizzazione...'; }
+    $('#res-copy-alloc-error').textContent = '';
+
+    try {
+        if ($('#chk-copy-overwrite')?.checked) {
+            const delRes = deleteAllocazioniScenario(toId);
+            if (delRes && delRes.error) throw new Error(delRes.error);
+            // Hard-delete cloud-side: cancella TUTTE le allocazioni dello scenario nel cloud,
+            // anche quelle di altri utenti che non sono nel nostro localStorage (post-dedup).
+            // Senza questo, "Sovrascrivi" multi-utente lascia residui nel cloud.
+            await deleteAllocazioniScenarioCloud(toId);
+        }
+        const n = copyAllocazioniScenario(fromId, toId);
+        if (n && typeof n === 'object' && n.error) throw new Error(n.error);
+        _renderSubTab(_currentSubTab);
+        // Push sincrono: garantisce che le copie siano nel cloud prima di chiudere la modal.
+        // Senza questo, chiudere l'app entro 2s (intervallo polling) può perdere le modifiche.
+        await pushAllocazioniNow();
+        _closeModal('res-copy-alloc-modal');
+        _showToast(`Copiate ${n} allocazioni — sincronizzate`);
+    } catch (err) {
+        $('#res-copy-alloc-error').textContent = `Sincronizzazione fallita: ${err.message}. Riprova prima di chiudere l'app.`;
+    } finally {
+        if (btn) { btn.disabled = false; btn.textContent = originalText || 'Conferma'; }
+    }
 }
 
 // ─── MODAL: IMPORT ───────────────────────────────────────────

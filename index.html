@@ -418,7 +418,14 @@
               <rect x="2" y="3" width="9" height="18" rx="1"/>
               <rect x="13" y="3" width="9" height="18" rx="1"/>
             </svg>
-            Comparison Scenari
+            Comparison VDP
+          </button>
+          <button class="tab-btn hidden" data-tab="costi-comparativo" id="tab-btn-costi-comparativo">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="12" y1="1" x2="12" y2="23"/>
+              <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
+            </svg>
+            Comparison Costi
           </button>
           <button class="tab-btn" data-tab="risorse">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -428,6 +435,13 @@
               <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
             </svg>
             Risorse
+          </button>
+          <button class="tab-btn" data-tab="analisi-multi">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M3 3v18h18"/>
+              <path d="M7 14l4-4 4 4 5-5"/>
+            </svg>
+            Analisi
           </button>
           <button class="tab-btn hidden" data-tab="gestione-scenari" id="tab-btn-gestione-scenari">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -576,11 +590,27 @@
 
         <!-- ASSUMPTIONS TAB -->
         <div id="tab-assumptions" class="tab-panel">
-          <div class="assumptions-toolbar">
+          <!-- Sub-nav VDP / Costi (modulo costi: nascosta finché WHATIF_COSTI_ENABLED non la attiva) -->
+          <div class="cost-sub-nav hidden" id="cost-sub-nav">
+            <button class="cost-sub-tab-btn active" data-cost-subtab="vdp">Assunzioni VDP</button>
+            <button class="cost-sub-tab-btn" data-cost-subtab="costi">Assunzioni Costi</button>
+          </div>
+          <!-- Banner "nessuno scenario selezionato": visibile su entrambi i sub-tab -->
+          <div class="cost-noscen-banner hidden" id="cost-noscen-banner">
+            <span class="cost-noscen-text">🎯 Seleziona uno scenario dal menu a tendina in alto per visualizzare assunzioni e costi.</span>
+          </div>
+          <!-- Banner scenario locked: visibile su entrambi i sub-tab (VDP e Costi) -->
+          <div class="cost-locked-banner-wrapper hidden" id="cost-locked-banner-wrapper">
+            <span class="cost-warning">🔒 Scenario bloccato — sblocca dal menu scenari per modificare assunzioni e costi.</span>
+          </div>
+          <div class="assumptions-toolbar" id="cost-subpanel-vdp-toolbar">
             <h2>Assunzioni Scenario Selezionato</h2>
             <div class="assumptions-actions">
               <label class="toggle-label">
                 <input type="checkbox" id="chk-show-modified" /> Solo modificate
+              </label>
+              <label class="toggle-label">
+                <input type="checkbox" id="chk-show-prob100" /> Solo Probabilità 100%
               </label>
             </div>
           </div>
@@ -601,7 +631,7 @@
               </div>
               <div class="slider-row">
                 <label>Margine (%)</label>
-                <input type="number" id="global-oi-margin" value="" min="0" max="100" step="0.5" placeholder="—" />
+                <input type="number" id="global-oi-margin" value="" min="-100" max="100" step="0.5" placeholder="—" />
                 <button class="btn btn-sm btn-ghost" id="btn-apply-oi-margin">Applica</button>
               </div>
             </div>
@@ -614,33 +644,90 @@
               </div>
               <div class="slider-row">
                 <label>Margine (%)</label>
-                <input type="number" id="global-bl-margin" value="" min="0" max="100" step="0.5" placeholder="—" />
+                <input type="number" id="global-bl-margin" value="" min="-100" max="100" step="0.5" placeholder="—" />
                 <button class="btn btn-sm btn-ghost" id="btn-apply-bl-margin">Applica</button>
               </div>
             </div>
           </div>
 
           <!-- Commesse Table -->
-          <div class="table-container">
+          <div class="table-container" id="cost-subpanel-vdp-table">
             <table id="assumptions-table" class="assumptions-table">
               <thead>
                 <tr>
-                  <th class="col-settore">Settore</th>
-                  <th class="col-type">Tipo</th>
-                  <th class="col-codice">Codice</th>
-                  <th class="col-nome">Commessa</th>
-                  <th class="col-prob-aop">Prob AOP</th>
-                  <th class="col-vdp-tot">VDP Tot Base</th>
-                  <th class="col-margin-aop">Margine AOP</th>
-                  <th class="col-input">Shift Start</th>
-                  <th class="col-input">Probabilità %</th>
-                  <th class="col-input">Margine %</th>
-                  <th class="col-input">Ritardo Fine</th>
-                  <th class="col-input">Type Override</th>
+                  <th class="col-settore sortable" data-sort="settore">Settore</th>
+                  <th class="col-type sortable" data-sort="tipo">Tipo</th>
+                  <th class="col-codice sortable" data-sort="codice">Codice</th>
+                  <th class="col-nome sortable" data-sort="nome">Commessa</th>
+                  <th class="col-prob-aop sortable" data-sort="probAop">Prob AOP</th>
+                  <th class="col-vdp-tot sortable" data-sort="vdp">VDP Tot Base</th>
+                  <th class="col-margin-aop sortable" data-sort="margineAop">Margine AOP</th>
+                  <th class="col-input sortable" data-sort="shift">Shift Start</th>
+                  <th class="col-input sortable" data-sort="prob">Probabilità %</th>
+                  <th class="col-input sortable" data-sort="margine">Margine %</th>
+                  <th class="col-input sortable" data-sort="ritardo">Ritardo Fine</th>
+                  <th class="col-input sortable" data-sort="typeOverride">Type Override</th>
                 </tr>
               </thead>
               <tbody id="assumptions-tbody"></tbody>
             </table>
+          </div>
+
+          <!-- Sub-panel Costi -->
+          <div id="cost-subpanel-costi" class="cost-subpanel hidden">
+            <div class="cost-toolbar">
+              <div class="cost-toolbar-row">
+                <span id="cost-commessa-info" class="cost-commessa-info"></span>
+                <span class="cost-toolbar-spacer"></span>
+                <button type="button" class="btn btn-outline btn-sm" id="cost-btn-import-bi" title="Importa costi da export BI (.xlsx)">📥 Importa da BI</button>
+                <label class="cost-hide-empty-toggle" title="Nascondi commesse con AC storico = 0 e Importo Futuro = 0">
+                    <input type="checkbox" id="cost-chk-hide-empty">
+                    <span>Nascondi commesse vuote</span>
+                    <span id="cost-hide-empty-count" class="cost-hide-empty-count"></span>
+                </label>
+                <button type="button" class="btn btn-ghost btn-sm" id="cost-btn-expand-all" title="Espandi tutte le commesse">Espandi tutto</button>
+                <button type="button" class="btn btn-ghost btn-sm" id="cost-btn-collapse-all" title="Collassa tutte le commesse">Collassa tutto</button>
+                <button type="button" class="btn btn-ghost btn-sm cost-btn-danger" id="cost-btn-azzera-tutto" title="Azzera i costi di TUTTE le commesse dello scenario corrente">🗑 Azzera tutto</button>
+              </div>
+              <div class="cost-toolbar-row hidden" id="cost-no-scenario-warning">
+                <span class="cost-warning">⚠ Nessuno scenario attivo. Seleziona uno scenario dal menu principale per visualizzare i costi.</span>
+              </div>
+            </div>
+            <div id="cost-empty-state" class="cost-subpanel-placeholder">
+              <p>Nessuna commessa visualizzabile. Verifica che la baseline ricavi sia caricata e che lo scenario sia attivo.</p>
+            </div>
+            <div id="cost-commesse-container" class="cost-commesse-container hidden"></div>
+            <div id="cost-aggregato-container" class="cost-aggregato-container hidden"></div>
+          </div>
+        </div>
+
+        <!-- COSTI COMPARATIVO TAB (modulo costi, P13) -->
+        <div id="tab-costi-comparativo" class="tab-panel">
+          <div class="costi-comp-toolbar">
+            <h2 class="costi-comp-title">📊 Conto Economico — comparazione costi</h2>
+            <div class="costi-comp-controls">
+              <div class="costi-comp-control-group">
+                <label>Scenario attuale:</label>
+                <span id="costi-comp-scen-attuale" class="costi-comp-scen-label">—</span>
+              </div>
+              <div class="costi-comp-control-group">
+                <label for="costi-comp-confronto-select">Scenario di riferimento di confronto:</label>
+                <select id="costi-comp-confronto-select" class="costi-comp-select">
+                  <option value="">— seleziona —</option>
+                </select>
+              </div>
+              <div class="costi-comp-control-group" style="margin-left: auto;">
+                <button id="costi-comp-export-btn" class="btn btn-outline btn-sm" type="button" title="Esporta il Conto Economico in Excel">📄 Esporta Excel</button>
+              </div>
+            </div>
+          </div>
+          <div id="costi-comp-empty-state" class="cost-subpanel-placeholder">
+            <p>Seleziona uno scenario di confronto per visualizzare il Conto Economico comparativo.</p>
+          </div>
+          <div id="costi-comp-content" class="costi-comp-content hidden">
+            <p style="padding: 32px; text-align: center; color: var(--text-muted, #888); border: 1px dashed var(--border); border-radius: 8px;">
+              🚧 Tabella Conto Economico in costruzione (P14 — calcolo aggregato + pivot mese × categoria con confronto).
+            </p>
           </div>
         </div>
 
@@ -772,6 +859,49 @@
             <div id="res-tab-pianificazione" class="res-tab-panel"></div>
             <div id="res-tab-commesse" class="res-tab-panel"></div>
             <div id="res-tab-capacity" class="res-tab-panel"></div>
+          </div>
+        </div>
+
+        <!-- ANALISI TAB -->
+        <div id="tab-analisi-multi" class="tab-panel">
+          <div class="ana-sub-nav">
+            <button class="ana-sub-btn active" data-anatab="costo-personale">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M3 3v18h18"/>
+                <rect x="6" y="10" width="3" height="8"/>
+                <rect x="11" y="6" width="3" height="12"/>
+                <rect x="16" y="13" width="3" height="5"/>
+              </svg>
+              Costo Personale: Pianificato vs Modello
+            </button>
+            <div class="ana-sub-nav-spacer"></div>
+            <label class="ana-toggle" title="Nascondi commesse senza personale allocato (Costo Pianificato = 0)">
+              <input type="checkbox" id="ana-chk-hide-empty">
+              <span>Nascondi commesse senza pianificazione</span>
+            </label>
+            <button id="btn-ana-export-excel" class="btn btn-outline btn-sm">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                <polyline points="14 2 14 8 20 8"/>
+                <line x1="16" y1="13" x2="8" y2="13"/>
+                <line x1="16" y1="17" x2="8" y2="17"/>
+              </svg>
+              Esporta Excel
+            </button>
+          </div>
+          <div class="ana-content">
+            <div id="ana-tab-costo-personale" class="ana-tab-panel active">
+              <div id="ana-costo-personale-empty" class="ana-empty hidden">
+                <p>Seleziona uno scenario attivo per visualizzare il confronto.</p>
+              </div>
+              <div id="ana-costo-personale-content">
+                <div id="ana-kpi-row" class="ana-kpi-row"></div>
+                <div id="ana-chart-wrapper" class="ana-chart-wrapper">
+                  <canvas id="ana-chart-canvas"></canvas>
+                </div>
+                <div id="ana-table-wrapper" class="ana-table-wrapper"></div>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -1415,6 +1545,16 @@
               </div>
               <p style="font-size:10px;color:var(--text-muted);margin-top:4px;">Le app con versione inferiore non potranno pushare dati.</p>
             </div>
+            <!-- Categorie costi (P19) -->
+            <div id="admin-cost-categories-section" class="hidden" style="margin-top:14px;border-top:1px solid var(--border);padding-top:10px;">
+              <p style="font-weight:600;font-size:13px;margin-bottom:6px;">Categorie costi</p>
+              <div id="admin-cost-cat-list" style="font-size:11px;"></div>
+              <div style="display:flex;gap:6px;margin-top:8px;">
+                <button id="admin-cost-cat-add-btn" class="btn btn-outline btn-sm" style="font-size:11px;">➕ Aggiungi categoria</button>
+                <button id="admin-cost-cat-toggle-archived" class="btn btn-ghost btn-sm" style="font-size:11px;">Mostra archiviate</button>
+              </div>
+              <p style="font-size:10px;color:var(--text-muted);margin-top:4px;">Modifica label e alias BI delle categorie. Archiviate (soft delete): dati storici preservati.</p>
+            </div>
           </div>
           <button id="btn-cloud-logout" class="btn btn-ghost btn-sm" style="width:100%;margin-top:12px;color:var(--danger);">
             Disconnetti
@@ -1449,7 +1589,50 @@
     </div>
   </div>
 
+  <!-- COST IMPORT BI MODAL -->
+  <div id="cost-import-modal" class="modal hidden">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content modal-lg" style="max-width:920px;">
+      <div class="modal-header">
+        <h3>Importa costi da BI</h3>
+        <button class="modal-close" id="cost-import-close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div id="cost-import-summary" class="cost-import-summary"></div>
+        <div id="cost-import-warnings" class="cost-import-warnings"></div>
+        <div class="cost-import-actions">
+          <button type="button" id="cost-import-select-all" class="btn btn-ghost btn-sm">✓ Seleziona tutto</button>
+          <button type="button" id="cost-import-deselect-all" class="btn btn-ghost btn-sm">✗ Deseleziona tutto</button>
+        </div>
+        <div class="cost-import-table-wrapper">
+          <table class="cost-import-table">
+            <thead>
+              <tr>
+                <th class="cost-import-th-check">Importa</th>
+                <th>Codice BI</th>
+                <th>Nome BI</th>
+                <th>Commessa app suggerita</th>
+                <th>Override</th>
+              </tr>
+            </thead>
+            <tbody id="cost-import-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="modal-footer" style="display:flex;justify-content:space-between;align-items:center;gap:12px;padding:12px 16px;border-top:1px solid var(--border);">
+        <span id="cost-import-counter" class="cost-import-counter"></span>
+        <div style="display:flex;gap:8px;">
+          <button class="btn btn-ghost" id="cost-import-cancel">Annulla</button>
+          <button class="btn btn-primary" id="cost-import-confirm">Importa selezionate</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script type="module" src="/src/main.js"></script>
+  <script type="module" src="/src/costi/costUI.js"></script>
+  <script type="module" src="/src/scenarioOrderUI.js"></script>
+  <script type="module" src="/src/analisi/analisiUI.js"></script>
 </body>
 
 </html>

@@ -105,13 +105,38 @@ export function deleteScenario(id) {
     return true;
 }
 
+// ─────────────────────────────────────────────────────
+// Hook per snapshot costi al lock (registrato dal modulo costi)
+// Se nessuno registra un provider, lockScenario funziona identico al pre-modulo.
+// ─────────────────────────────────────────────────────
+let _costiSnapshotProvider = null;
+export function setCostiSnapshotProvider(fn) {
+    _costiSnapshotProvider = (typeof fn === 'function') ? fn : null;
+}
+
 export function lockScenario(id, email) {
     const scenarios = loadAll();
     const scen = scenarios.find(s => s.id === id);
     if (!scen) return null;
+
+    // Genera snapshot costi prima del lock (se provider registrato dal modulo costi).
+    // Esegue su una "copia di lavoro" dello scenario (non ancora locked) per evitare
+    // di entrare nel ramo bypass-snapshot di computeCategoriaMensile.
+    if (_costiSnapshotProvider) {
+        try {
+            const snap = _costiSnapshotProvider(scen);
+            if (snap && Object.keys(snap).length > 0) {
+                scen.costiSnapshot = snap;
+            }
+        } catch (err) {
+            console.warn('[scenarioManager] costi snapshot generation failed:', err);
+        }
+    }
+
     scen.locked = true;
     scen.lockedBy = email || '';
     scen.lockedAt = new Date().toISOString();
+    scen.snapshotAt = scen.lockedAt;
     scen.updatedAt = new Date().toISOString();
     saveAll(scenarios);
     return scen;
@@ -124,6 +149,8 @@ export function unlockScenario(id) {
     scen.locked = false;
     scen.lockedBy = null;
     scen.lockedAt = null;
+    // Cancella snapshot costi: i valori tornano ad essere ricalcolati dinamicamente
+    if (scen.costiSnapshot !== undefined) scen.costiSnapshot = null;
     scen.updatedAt = new Date().toISOString();
     saveAll(scenarios);
     return scen;

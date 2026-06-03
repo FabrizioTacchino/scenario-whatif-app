@@ -26,6 +26,13 @@ Ignore/
 # File Office / dati locali
 *.xlsx
 *.xls
+*.docx
+*.doc
+
+# Screenshot / immagini con dati aziendali — MAI versionare
+Screenshot/
+*export*.png
+vicenza*.png
 
 # File binari / pacchetti
 *.exe

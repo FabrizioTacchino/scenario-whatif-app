@@ -1121,11 +1121,9 @@ function populateFilters() {
         commContainer.appendChild(btn);
     }
 
-    // Date range
-    if (allMonths.length) {
-        $('#filter-date-from').value = allMonths[0];
-        $('#filter-date-to').value = allMonths[allMonths.length - 1];
-    }
+    // Date range: lasciato vuoto = nessun limite (mostra tutti i mesi, inclusi quelli degli scenari oltre la baseline)
+    $('#filter-date-from').value = '';
+    $('#filter-date-to').value = '';
 }
 
 function getActiveFilters() {
@@ -1192,13 +1190,11 @@ function setupFilterEvents() {
             const isRisorse = document.querySelector('.tab-btn.active')?.dataset.tab === 'risorse';
             const isActive = btn.classList.contains('active');
 
-            // Toggle: se già attivo lo deseleziono e ripristino range completo
+            // Toggle: se già attivo lo deseleziono e svuoto il range (= nessun limite, tutti i mesi)
             if (isActive) {
                 btn.classList.remove('active');
-                if (appData?.allMonths?.length) {
-                    $('#filter-date-from').value = appData.allMonths[0];
-                    $('#filter-date-to').value = appData.allMonths[appData.allMonths.length - 1];
-                }
+                $('#filter-date-from').value = '';
+                $('#filter-date-to').value = '';
             } else {
                 // Deseleziona gli altri shortcut e attiva questo
                 $$('.btn-year-shortcut.active').forEach(b => b.classList.remove('active'));
@@ -1229,10 +1225,8 @@ function setupFilterEvents() {
         }
         filterSidebarCommesse();
 
-        if (appData?.allMonths?.length) {
-            $('#filter-date-from').value = appData.allMonths[0];
-            $('#filter-date-to').value = appData.allMonths[appData.allMonths.length - 1];
-        }
+        $('#filter-date-from').value = '';
+        $('#filter-date-to').value = '';
         refreshDashboard();
         const isRisorse = $('#tab-risorse')?.classList.contains('active');
         if (isRisorse) renderResourceTab();
@@ -3184,6 +3178,10 @@ function renderAnalisiCharts(monthly, commessaResults) {
 // ============================================================
 //  ASSUMPTIONS TABLE
 // ============================================================
+let assumptionsSortCol = null;   // column key string (data-sort)
+let assumptionsSortDir = 'asc';  // 'asc' | 'desc'
+let _assumptionsSortInit = false;
+
 function renderAssumptionsTable() {
     if (!appData) return;
     const tbody = $('#assumptions-tbody');
@@ -3192,6 +3190,7 @@ function renderAssumptionsTable() {
     const scen = activeScenarioId ? getScenario(activeScenarioId) : null;
     const inputs = scen ? scen.inputs || {} : {};
     const showModifiedOnly = $('#chk-show-modified')?.checked || false;
+    const showProb100Only = $('#chk-show-prob100')?.checked || false;
 
     // Filters logic
     const filters = getActiveFilters();
@@ -3201,7 +3200,39 @@ function renderAssumptionsTable() {
     const scenNewCommesse = scen?.newCommesse || [];
     const allCommesseForTable = scenNewCommesse.length > 0 ? [...appData.commesse, ...scenNewCommesse] : appData.commesse;
 
-    for (const comm of allCommesseForTable) {
+    // Ordinamento colonne (copia per non mutare appData.commesse)
+    let rowsForTable = allCommesseForTable;
+    if (assumptionsSortCol) {
+        const dir = assumptionsSortDir === 'asc' ? 1 : -1;
+        const sortVal = (comm) => {
+            const ci = inputs[comm.key] || {};
+            const effType = ci.type || comm.type;
+            switch (assumptionsSortCol) {
+                case 'settore': return comm.settore || '';
+                case 'tipo': return effType || '';
+                case 'codice': return comm.codice || '';
+                case 'nome': return comm.nome || '';
+                case 'probAop': return comm.probabilitaAOP ?? 0;
+                case 'vdp': return comm.vdpTotale ?? 0;
+                case 'margineAop': return comm.margineAOP ?? 0;
+                case 'shift': return Number(ci.shiftStart) || 0;
+                case 'prob': return (ci.probabilita != null && ci.probabilita !== '') ? Number(ci.probabilita) : (comm.probabilitaAOP * 100);
+                case 'margine': return (ci.margine != null && ci.margine !== '') ? Number(ci.margine) : (comm.margineAOP * 100);
+                case 'ritardo': return Number(ci.ritardo) || 0;
+                case 'typeOverride': return effType || '';
+                default: return '';
+            }
+        };
+        rowsForTable = [...allCommesseForTable].sort((a, b) => {
+            const va = sortVal(a), vb = sortVal(b);
+            if (typeof va === 'string' || typeof vb === 'string') {
+                return String(va).localeCompare(String(vb), 'it', { numeric: true }) * dir;
+            }
+            return (va - vb) * dir;
+        });
+    }
+
+    for (const comm of rowsForTable) {
         // Sector Filter
         if (filters.settori && filters.settori.length && !filters.settori.includes(comm.settore)) continue;
         // Type Filter — use effective type (respects scenario override)
@@ -3225,6 +3256,14 @@ function renderAssumptionsTable() {
             ci.ritardo || ci.smussamento;
 
         if (showModifiedOnly && !isModified) continue;
+
+        // Filtro "Solo Probabilità 100%" — usa la probabilità effettiva (input scenario o AOP)
+        if (showProb100Only) {
+            const effProb = (ci.probabilita != null && ci.probabilita !== '')
+                ? Number(ci.probabilita)
+                : (comm.probabilitaAOP * 100);
+            if (effProb !== 100) continue;
+        }
 
         const tr = document.createElement('tr');
         if (isModified) tr.classList.add('modified');
@@ -3271,7 +3310,7 @@ function renderAssumptionsTable() {
         tdProb.appendChild(mkInput('input-prob', ci.probabilita != null && ci.probabilita !== '' ? ci.probabilita : '', '0', '100', '5', (comm.probabilitaAOP * 100).toFixed(0), !isOI || !activeScenarioId));
 
         const tdMargin = document.createElement('td');
-        tdMargin.appendChild(mkInput('input-margin', ci.margine != null && ci.margine !== '' ? ci.margine : '', '0', '100', '0.5', (comm.margineAOP * 100).toFixed(1), !activeScenarioId));
+        tdMargin.appendChild(mkInput('input-margin', ci.margine != null && ci.margine !== '' ? ci.margine : '', '-100', '100', '0.5', (comm.margineAOP * 100).toFixed(1), !activeScenarioId));
 
         const tdRitardo = document.createElement('td');
         tdRitardo.appendChild(mkInput('input-ritardo', ci.ritardo || '', '0', '24', '1', '0', !isBL || !activeScenarioId));
@@ -3332,7 +3371,7 @@ function renderAssumptionsTable() {
                 e.target.value = '';
                 return;
             }
-            if (field === 'margine' && val != null && (val < 0 || val > 100)) {
+            if (field === 'margine' && val != null && (val < -100 || val > 100)) {
                 e.target.value = '';
                 return;
             }
@@ -3381,6 +3420,33 @@ function renderAssumptionsTable() {
     // Show modified filter
     $('#chk-show-modified')?.removeEventListener('change', handleShowModified);
     $('#chk-show-modified')?.addEventListener('change', handleShowModified);
+    $('#chk-show-prob100')?.removeEventListener('change', handleShowModified);
+    $('#chk-show-prob100')?.addEventListener('change', handleShowModified);
+
+    // Indicatore di ordinamento sugli header
+    $$('#assumptions-table thead th[data-sort]').forEach(th => {
+        th.classList.remove('sort-asc', 'sort-desc');
+        if (th.dataset.sort === assumptionsSortCol) {
+            th.classList.add(assumptionsSortDir === 'asc' ? 'sort-asc' : 'sort-desc');
+        }
+    });
+
+    // Listener click header per ordinamento (registrato una sola volta, delegato sul thead)
+    if (!_assumptionsSortInit) {
+        _assumptionsSortInit = true;
+        $('#assumptions-table')?.addEventListener('click', (e) => {
+            const th = e.target.closest('th[data-sort]');
+            if (!th) return;
+            const col = th.dataset.sort;
+            if (assumptionsSortCol === col) {
+                assumptionsSortDir = assumptionsSortDir === 'asc' ? 'desc' : 'asc';
+            } else {
+                assumptionsSortCol = col;
+                assumptionsSortDir = 'asc';
+            }
+            renderAssumptionsTable();
+        });
+    }
 }
 
 function handleShowModified() {
@@ -4256,7 +4322,7 @@ function setupExportEvents() {
     const BACKUP_GROUPS = {
         scenari:     ['whatif_baseline', 'whatif_scenarios'],
         risorse:     ['whatif_ruoli', 'whatif_persone', 'whatif_allocazioni', 'whatif_audit'],
-        preferenze:  ['theme', 'appZoomLevel', 'res-cessate-banner-collapsed', 'res-cessate-ignorati-collapsed', 'whatif_supabase_auth', 'whatif_sync_queue', 'whatif_sync_last', 'whatif_deleted_scenarios', 'whatif_deleted_persone', 'whatif_deleted_allocazioni'],
+        preferenze:  ['theme', 'appZoomLevel', 'res-cessate-banner-collapsed', 'res-cessate-ignorati-collapsed', 'whatif_supabase_auth', 'whatif_sync_queue', 'whatif_sync_last', 'whatif_deleted_scenarios', 'whatif_deleted_persone', 'whatif_deleted_allocazioni', 'whatif_cost_panel_expanded', 'whatif_cost_categories', 'whatif_scenarios_order', 'whatif_cost_hide_empty', 'whatif_ana_hide_empty'],
     };
 
     $('#btn-backup-export')?.addEventListener('click', () => {

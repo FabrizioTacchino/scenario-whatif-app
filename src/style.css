@@ -1488,24 +1488,24 @@ body {
 }
 
 /* Sortable headers */
-.scen-compare-table th.sortable {
+.assumptions-table th.sortable {
   cursor: pointer;
   user-select: none;
   white-space: nowrap;
 }
 
-.scen-compare-table th.sortable:hover {
+.assumptions-table th.sortable:hover {
   background: var(--bg-card-hover, rgba(99,140,255,.08));
 }
 
-.scen-compare-table th.sortable::after {
+.assumptions-table th.sortable::after {
   content: ' ⇅';
   opacity: .35;
   font-size: .7rem;
 }
 
-.scen-compare-table th.sort-asc::after  { content: ' ↑'; opacity: .85; }
-.scen-compare-table th.sort-desc::after { content: ' ↓'; opacity: .85; }
+.assumptions-table th.sort-asc::after  { content: ' ↑'; opacity: .85; }
+.assumptions-table th.sort-desc::after { content: ' ↓'; opacity: .85; }
 
 /* Type-changed row highlight */
 .scen-row-type-changed {
@@ -2863,7 +2863,7 @@ body {
   margin-bottom: -2px;
   transition: color .2s, border-color .2s;
 }
-.cloud-auth-tab:hover { color: var(--text); }
+.cloud-auth-tab:hover { color: var(--text-primary); }
 .cloud-auth-tab.active {
   color: var(--primary);
   border-bottom-color: var(--primary);
@@ -2885,8 +2885,8 @@ body {
   padding: 8px 10px;
   border: 1px solid var(--border);
   border-radius: 6px;
-  background: var(--bg-2);
-  color: var(--text);
+  background: var(--bg-card-hover);
+  color: var(--text-primary);
   font-size: 13px;
   box-sizing: border-box;
   transition: border-color .2s;
@@ -3193,4 +3193,1102 @@ body {
 }
 .details-data-table tbody tr:hover {
   background: rgba(99, 140, 255, .05);
+}
+
+/* ───────────────────────────────────────────────────────────
+   Modulo Costi — sub-nav VDP / Costi nel tab Assumptions (P7)
+   ─────────────────────────────────────────────────────────── */
+.cost-sub-nav {
+  display: flex;
+  gap: 8px;
+  margin: 0 0 16px 0;
+  padding: 4px;
+  background: var(--bg-card-hover);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  width: fit-content;
+}
+.cost-sub-tab-btn {
+  padding: 8px 18px;
+  font-size: 13px;
+  font-weight: 600;
+  background: transparent;
+  border: none;
+  color: var(--text-muted, #666);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all .15s ease;
+}
+.cost-sub-tab-btn:hover {
+  color: var(--text-primary);
+  background: rgba(99, 140, 255, .08);
+}
+.cost-sub-tab-btn.active {
+  background: var(--accent, #638cff);
+  color: #fff;
+}
+.cost-subpanel {
+  padding: 8px 0;
+}
+.cost-subpanel-placeholder {
+  text-align: center;
+  padding: 60px 24px;
+  color: var(--text-muted, #888);
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  background: var(--bg-card-hover);
+}
+.cost-subpanel-placeholder p {
+  margin: 0 0 8px 0;
+  font-size: 14px;
+}
+.cost-subpanel-hint {
+  font-size: 12px;
+  opacity: .7;
+}
+
+/* ───────────────────────────────────────────────────────────
+   Modulo Costi — pannello per-scenario read-only (P8)
+   ─────────────────────────────────────────────────────────── */
+.cost-toolbar {
+  margin-bottom: 16px;
+  padding: 12px;
+  background: var(--bg-card-hover);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.cost-toolbar-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.cost-toolbar-row + .cost-toolbar-row {
+  margin-top: 8px;
+}
+.cost-toolbar-label {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+.cost-commessa-select {
+  flex: 1;
+  min-width: 240px;
+  max-width: 480px;
+  padding: 6px 10px;
+  font-size: 13px;
+  background: var(--bg-card);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.cost-origine-badge {
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.cost-origine-badge.origine-scenario_corrente { background: #d4f5dd; color: #1e6b3a; }
+.cost-origine-badge.origine-copiato_da_scenario { background: #d9e7ff; color: #1e3d8a; }
+.cost-origine-badge.origine-cold_start_margine { background: #fff3cd; color: #7a5c00; }
+.cost-origine-badge.origine-bi_import { background: #e6d9ff; color: #5a2a9a; }
+.cost-origine-badge.origine-vuoto { background: #f0f0f0; color: #777; }
+.cost-warning {
+  font-size: 12px;
+  color: #b75200;
+  font-weight: 500;
+}
+.cost-table-container {
+  overflow-x: auto;
+}
+.cost-categoria-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.cost-categoria-table thead th {
+  background: var(--bg-card-hover);
+  text-align: left;
+  padding: 8px 10px;
+  font-weight: 600;
+  border-bottom: 2px solid var(--border);
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+.cost-categoria-table thead th.num {
+  text-align: right;
+}
+.cost-categoria-table tbody td {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-primary);
+}
+.cost-categoria-table tbody td.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.cost-categoria-table tbody tr:hover {
+  background: rgba(99, 140, 255, .04);
+}
+.cost-categoria-table tbody td.cost-cat-empty {
+  color: var(--text-muted, #888);
+  font-style: italic;
+}
+.cost-categoria-table .cost-totale-row td {
+  background: var(--bg-card-hover);
+  font-weight: 700;
+  border-top: 2px solid var(--border);
+  border-bottom: none;
+  padding: 8px 10px;
+}
+.cost-categoria-table .cost-totale-row td.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Info testuale accanto al selettore commessa nel pannello costi (P8 revised) */
+.cost-commessa-info {
+  font-size: 11px;
+  color: var(--text-muted, #888);
+  font-style: italic;
+  white-space: nowrap;
+}
+.cost-commessa-select:disabled {
+  opacity: .55;
+  cursor: not-allowed;
+}
+
+/* ───────────────────────────────────────────────────────────
+   Modulo Costi — vista multi-commessa con card collassabili (P8 v2)
+   ─────────────────────────────────────────────────────────── */
+.cost-toolbar-spacer {
+  flex: 1;
+}
+.cost-hide-empty-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-secondary, #cbd5e1);
+  cursor: pointer;
+  user-select: none;
+  padding: 0 6px;
+}
+.cost-hide-empty-toggle input[type="checkbox"] {
+  cursor: pointer;
+  margin: 0;
+}
+.cost-hide-empty-count {
+  color: var(--text-muted, #94a3b8);
+  font-size: 11px;
+  font-style: italic;
+}
+.cost-hide-empty-count:empty {
+  display: none;
+}
+.cost-commesse-container {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.cost-commessa-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-card);
+  overflow: hidden;
+}
+.cost-commessa-card-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: var(--bg-card-hover);
+  cursor: pointer;
+  user-select: none;
+  transition: background .12s ease;
+}
+.cost-commessa-card-header:hover {
+  background: rgba(99, 140, 255, .06);
+}
+.cost-commessa-card-header .chevron {
+  font-size: 11px;
+  transition: transform .15s ease;
+  color: var(--text-muted, #888);
+  width: 12px;
+  display: inline-block;
+  text-align: center;
+}
+.cost-commessa-card.expanded .cost-commessa-card-header .chevron {
+  transform: rotate(90deg);
+}
+.cost-commessa-card-header .codice {
+  font-family: 'Consolas', monospace;
+  font-weight: 700;
+  font-size: 12px;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+.cost-commessa-card-header .nome {
+  font-size: 13px;
+  color: var(--text-primary);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cost-commessa-card-header .header-badge {
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.cost-commessa-card-header .badge-type-oi { background: #d9e7ff; color: #1e3d8a; }
+.cost-commessa-card-header .badge-type-bl { background: #ffe4cc; color: #7a4500; }
+.cost-commessa-card-header .badge-settore { background: #f0f0f0; color: #555; }
+.cost-commessa-card-header .badge-origine { background: #fff8e0; color: #7a5c00; }
+.cost-commessa-card-header .totale {
+  font-weight: 700;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  color: var(--text-primary);
+  margin-left: auto;
+}
+.cost-commessa-card-body {
+  padding: 8px 14px 14px 14px;
+  background: var(--bg-card);
+}
+.cost-commessa-card-body.hidden {
+  display: none;
+}
+
+/* Card aggregato (sempre espansa, in fondo) */
+.cost-aggregato-container {
+  margin-top: 24px;
+  border: 2px solid var(--accent, #638cff);
+  border-radius: 8px;
+  background: var(--bg-card);
+  overflow: hidden;
+}
+.cost-aggregato-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  background: rgba(99, 140, 255, .08);
+  border-bottom: 1px solid var(--border);
+}
+.cost-aggregato-header .titolo {
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--text-primary);
+  flex: 1;
+}
+.cost-aggregato-header .totale {
+  font-weight: 700;
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent, #638cff);
+}
+.cost-aggregato-body {
+  padding: 8px 16px 16px 16px;
+}
+
+/* Modulo Costi — celle editabili nelle tabelle (P9) */
+.cost-categoria-table input[type="month"],
+.cost-categoria-table input[type="number"],
+.cost-categoria-table input.cost-num-input,
+.cost-categoria-table select {
+  width: 100%;
+  padding: 3px 6px;
+  font-size: 12px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-primary);
+  border-radius: 4px;
+  font-family: inherit;
+  box-sizing: border-box;
+}
+.cost-categoria-table input[type="month"]:hover,
+.cost-categoria-table input[type="number"]:hover,
+.cost-categoria-table input.cost-num-input:hover,
+.cost-categoria-table select:hover {
+  border-color: var(--border);
+  background: var(--bg-card-hover);
+}
+.cost-categoria-table input[type="month"]:focus,
+.cost-categoria-table input[type="number"]:focus,
+.cost-categoria-table input.cost-num-input:focus,
+.cost-categoria-table select:focus {
+  border-color: var(--accent, #638cff);
+  background: var(--bg-card);
+  outline: none;
+}
+.cost-categoria-table input[type="number"],
+.cost-categoria-table input.cost-num-input {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.cost-categoria-table input:disabled,
+.cost-categoria-table select:disabled {
+  opacity: .55;
+  cursor: not-allowed;
+  border-color: transparent !important;
+  background: transparent !important;
+}
+
+/* Pulsanti azione header card commessa (R3+R4): Azzera + Suggerisci */
+.cost-action-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 10px;
+  font-size: 11px;
+  line-height: 1.4;
+  cursor: pointer;
+  color: var(--text-muted, #888);
+  transition: all .12s ease;
+  margin-left: 4px;
+  white-space: nowrap;
+  font-weight: 500;
+}
+.cost-action-btn:hover {
+  background: rgba(99, 140, 255, .08);
+}
+.cost-azzera-btn:hover {
+  color: #b75200;
+  border-color: #b75200;
+  background: rgba(255, 200, 100, .12);
+}
+.cost-suggerisci-btn:hover {
+  color: var(--accent, #638cff);
+  border-color: var(--accent, #638cff);
+  background: rgba(99, 140, 255, .12);
+}
+
+/* Modulo Costi — grafico mensilizzazione (P10) */
+.cost-chart-container {
+  margin-top: 16px;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+.cost-chart-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.cost-chart-mode-label {
+  font-size: 12px;
+  color: var(--text-muted, #888);
+  font-weight: 500;
+}
+.cost-chart-mode-select {
+  font-size: 12px;
+  padding: 4px 10px;
+  background: var(--bg-card-hover);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.cost-chart-mode-select:hover {
+  border-color: var(--accent, #638cff);
+}
+.cost-chart-canvas-wrapper {
+  position: relative;
+  height: 280px;
+  width: 100%;
+}
+
+/* Modulo Costi — modal import BI (P11) */
+.cost-import-summary {
+  font-size: 13px;
+  margin-bottom: 12px;
+  padding: 8px 12px;
+  background: var(--bg-card-hover);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-primary);
+}
+.cost-import-summary strong { color: var(--accent, #638cff); }
+.cost-import-warnings {
+  margin-bottom: 12px;
+}
+.cost-import-warnings .warning-item {
+  font-size: 12px;
+  padding: 6px 10px;
+  margin-bottom: 4px;
+  background: #fff8e0;
+  color: #7a5c00;
+  border-left: 3px solid #d49b00;
+  border-radius: 3px;
+}
+.cost-import-actions {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+  align-items: center;
+}
+.cost-import-table-wrapper {
+  max-height: 50vh;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.cost-import-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.cost-import-table thead {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+.cost-import-table thead th {
+  background: var(--bg-card-hover);
+  text-align: left;
+  padding: 8px 10px;
+  font-weight: 600;
+  border-bottom: 2px solid var(--border);
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+.cost-import-table th.cost-import-th-check {
+  width: 60px;
+  text-align: center;
+}
+.cost-import-table tbody td {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-primary);
+}
+.cost-import-table tbody td.cost-import-td-check {
+  text-align: center;
+}
+.cost-import-table tbody tr.cost-import-row-warn {
+  background: rgba(255, 200, 100, 0.07);
+}
+.cost-import-table .cost-import-suggested-none {
+  color: #b75200;
+  font-style: italic;
+}
+.cost-import-table .cost-import-suggested-ok {
+  color: var(--text-primary);
+}
+.cost-import-table .cost-import-override {
+  font-size: 12px;
+  padding: 3px 6px;
+  background: var(--bg-card);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  width: 100%;
+  max-width: 260px;
+  font-family: inherit;
+}
+.cost-import-table .cost-import-override:focus {
+  outline: none;
+  border-color: var(--accent, #638cff);
+}
+.cost-import-table .cost-import-override.cost-import-override-invalid {
+  border-color: #d49b00;
+  background: rgba(255, 200, 100, 0.08);
+}
+.cost-import-counter {
+  font-size: 12px;
+  color: var(--text-muted, #888);
+}
+
+/* Modulo Costi — tab principale "Costi" comparativo (P13) */
+.costi-comp-toolbar {
+  margin-bottom: 16px;
+  padding: 16px;
+  background: var(--bg-card-hover);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.costi-comp-title {
+  margin: 0 0 12px 0;
+  font-size: 16px;
+  color: var(--text-primary);
+}
+.costi-comp-controls {
+  display: flex;
+  gap: 24px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.costi-comp-control-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.costi-comp-control-group label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted, #888);
+  white-space: nowrap;
+}
+.costi-comp-scen-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent, #638cff);
+  padding: 4px 10px;
+  background: rgba(99, 140, 255, 0.08);
+  border-radius: 4px;
+}
+.costi-comp-select {
+  font-size: 13px;
+  padding: 5px 10px;
+  background: var(--bg-card);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  min-width: 240px;
+  cursor: pointer;
+}
+.costi-comp-select:hover {
+  border-color: var(--accent, #638cff);
+}
+
+/* Modulo Costi — tabella Conto Economico comparativo (P14) */
+.costi-comp-content {
+  margin-top: 8px;
+}
+.costi-comp-table-wrapper {
+  overflow-x: auto;
+  overflow-y: auto;
+  max-height: calc(100vh - 280px);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-card);
+}
+.costi-comp-table {
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.costi-comp-table thead th {
+  background: var(--bg-card-hover);
+  padding: 6px 8px;
+  font-weight: 600;
+  border-bottom: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  text-align: center;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  color: var(--text-primary);
+}
+.costi-comp-table thead tr:nth-child(2) th {
+  top: 28px;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--text-muted, #888);
+}
+.costi-comp-table th.costi-comp-mese-group {
+  background: rgba(99, 140, 255, 0.10);
+}
+.costi-comp-table th.costi-comp-prog-group {
+  background: rgba(99, 140, 255, 0.18);
+}
+.costi-comp-table th.costi-comp-cat-col {
+  text-align: left;
+  position: sticky;
+  left: 0;
+  z-index: 4;
+  background-color: var(--bg-card-hover) !important;
+  border-right: 2px solid var(--border);
+  box-shadow: 4px 0 4px -2px rgba(0, 0, 0, 0.10);
+  min-width: 200px;
+}
+.costi-comp-table tbody td {
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+}
+.costi-comp-table tbody td.costi-comp-cat-col {
+  text-align: left;
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  background-color: var(--bg-card) !important;
+  border-right: 2px solid var(--border);
+  box-shadow: 4px 0 4px -2px rgba(0, 0, 0, 0.10);
+  font-weight: 500;
+  min-width: 200px;
+}
+/* Hover row: applico al td.cat-col stesso colore (no fall-through trasparenza) */
+.costi-comp-table tbody tr:hover td:not(.costi-comp-cat-col) {
+  background: rgba(99, 140, 255, 0.04);
+}
+.costi-comp-table tbody tr:hover td.costi-comp-cat-col {
+  background-color: color-mix(in srgb, var(--bg-card) 92%, rgba(99, 140, 255, 0.5) 8%) !important;
+}
+.costi-comp-table tbody td.num {
+  text-align: right;
+}
+.costi-comp-table tbody td.num.delta-pos {
+  color: #b75200;  /* arancio: aumento di costo */
+  font-weight: 500;
+}
+.costi-comp-table tbody td.num.delta-neg {
+  color: #1e6b3a;  /* verde: riduzione di costo */
+  font-weight: 500;
+}
+.costi-comp-table tbody td.num.delta-zero {
+  color: var(--text-muted, #999);
+}
+.costi-comp-table tbody tr.costi-comp-ricavo-row td {
+  background: rgba(99, 140, 255, 0.06);
+  font-weight: 600;
+  border-bottom: 2px solid var(--border);
+}
+.costi-comp-table tbody tr.costi-comp-ricavo-row td.costi-comp-cat-col {
+  /* Tinta blu su sfondo opaco (compone con bg-1 per evitare bleed) */
+  background-color: color-mix(in srgb, var(--bg-card) 80%, rgba(99, 140, 255, 0.5) 20%) !important;
+  color: var(--accent, #638cff);
+}
+.costi-comp-table tbody tr.costi-comp-totale-row td {
+  background: var(--bg-card-hover);
+  font-weight: 700;
+  border-top: 2px solid var(--border);
+}
+.costi-comp-table tbody tr.costi-comp-totale-row td.costi-comp-cat-col {
+  background-color: var(--bg-card-hover) !important;
+  font-weight: 700;
+}
+
+/* Modulo Costi — selettore vista nelle card commessa (P10b) */
+.cost-view-selector {
+  display: flex;
+  gap: 4px;
+  margin: 16px 0 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+.cost-view-selector button {
+  background: transparent;
+  border: none;
+  padding: 7px 16px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted, #888);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  transition: all .12s ease;
+  font-family: inherit;
+}
+.cost-view-selector button:hover:not(.active) {
+  color: var(--text-primary);
+  background: rgba(99, 140, 255, 0.04);
+}
+.cost-view-selector button.active {
+  color: var(--accent, #638cff);
+  border-bottom-color: var(--accent, #638cff);
+}
+.cost-view-container > div.hidden {
+  display: none;
+}
+
+/* Tabella Mensile / Progressivo per-commessa (P10b) */
+.cost-month-table-wrapper {
+  overflow-x: auto;
+  overflow-y: auto;
+  max-height: 640px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-card);
+}
+.cost-month-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.cost-month-table thead th {
+  background-color: var(--bg-card-hover) !important;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  font-weight: 600;
+  text-align: center;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  color: var(--text-primary);
+}
+.cost-month-table thead th.num {
+  text-align: right;
+}
+.cost-month-table thead th.cost-month-cat-col {
+  text-align: left;
+  position: sticky;
+  left: 0;
+  z-index: 4;
+  background-color: var(--bg-card-hover) !important;
+  border-right: 2px solid var(--border);
+  box-shadow: 4px 0 4px -2px rgba(0,0,0,.10);
+  min-width: 200px;
+}
+.cost-month-table thead th.cost-month-total-col {
+  background-color: var(--bg-card-hover) !important;
+  border-left: 2px solid var(--border);
+  text-align: right;
+}
+.cost-month-table tbody td {
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  color: var(--text-primary);
+}
+.cost-month-table tbody td.num {
+  text-align: right;
+}
+.cost-month-table tbody td.cost-month-cat-col {
+  text-align: left;
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  background-color: var(--bg-card) !important;
+  border-right: 2px solid var(--border);
+  box-shadow: 4px 0 4px -2px rgba(0,0,0,.10);
+  font-weight: 500;
+  min-width: 200px;
+}
+.cost-month-table tbody td.cost-month-total-col {
+  background-color: var(--bg-card-hover);
+  font-weight: 600;
+  border-left: 2px solid var(--border);
+  text-align: right;
+}
+.cost-month-table tbody tr:hover td:not(.cost-month-cat-col) {
+  background: rgba(99, 140, 255, 0.04);
+}
+.cost-month-table .cost-totale-row td {
+  background-color: var(--bg-card-hover) !important;
+  font-weight: 700;
+  border-top: 2px solid var(--border);
+}
+.cost-month-table .cost-totale-row td.num {
+  text-align: right;
+}
+.cost-month-table .cost-totale-row td.cost-month-cat-col {
+  background-color: var(--bg-card-hover) !important;
+}
+.cost-view-empty {
+  text-align: center;
+  padding: 32px 16px;
+  color: var(--text-muted, #888);
+  font-size: 13px;
+}
+
+/* Pannello admin — gestione dinamica categorie costi (P19) */
+#admin-cost-cat-list {
+  max-height: 320px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-card);
+}
+.admin-cost-cat-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+}
+.admin-cost-cat-row:last-child {
+  border-bottom: none;
+}
+.admin-cost-cat-row.archived {
+  opacity: 0.55;
+  font-style: italic;
+}
+.admin-cost-cat-row .cat-id {
+  font-family: 'Consolas', monospace;
+  font-size: 10px;
+  color: var(--text-muted, #888);
+  width: 130px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.admin-cost-cat-row .cat-label-input,
+.admin-cost-cat-row .cat-aliases-input {
+  flex: 1;
+  min-width: 80px;
+  padding: 3px 6px;
+  font-size: 11px;
+  background: var(--bg-card);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  font-family: inherit;
+}
+.admin-cost-cat-row .cat-label-input:focus,
+.admin-cost-cat-row .cat-aliases-input:focus {
+  outline: none;
+  border-color: var(--accent, #638cff);
+}
+.admin-cost-cat-row .cat-aliases-input {
+  font-family: 'Consolas', monospace;
+  max-width: 200px;
+}
+.admin-cost-cat-row button {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 2px 8px;
+  font-size: 11px;
+  cursor: pointer;
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+.admin-cost-cat-row button:hover {
+  background: var(--bg-card-hover);
+  border-color: var(--accent, #638cff);
+}
+.admin-cost-cat-archived-section {
+  border-top: 2px dashed var(--border);
+  padding: 6px 8px;
+  font-size: 10px;
+  color: var(--text-muted, #888);
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+/* Pulsante "Azzera tutto" nella toolbar costi (azione distruttiva) */
+.cost-btn-danger {
+  color: #b75200 !important;
+}
+.cost-btn-danger:hover {
+  background: rgba(255, 200, 100, 0.12) !important;
+  border-color: #b75200 !important;
+  color: #b75200 !important;
+}
+
+/* Banner scenario locked globale (visibile su entrambi i sub-tab Assumptions) */
+.cost-locked-banner-wrapper {
+  margin: 0 0 12px 0;
+  padding: 10px 14px;
+  background: rgba(255, 200, 100, 0.1);
+  border: 1px solid #d49b00;
+  border-left: 4px solid #d49b00;
+  border-radius: 6px;
+}
+.cost-locked-banner-wrapper .cost-warning {
+  font-size: 13px;
+  color: #b75200;
+  font-weight: 500;
+}
+
+/* Banner "nessuno scenario selezionato" — visibile su entrambi i sub-tab Assumptions */
+.cost-noscen-banner {
+  margin: 0 0 16px 0;
+  padding: 24px 20px;
+  background: rgba(99, 140, 255, 0.06);
+  border: 1px dashed var(--accent, #638cff);
+  border-radius: 8px;
+  text-align: center;
+}
+.cost-noscen-text {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--accent, #638cff);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Tab Analisi (Pianificato vs Modello)
+   ═══════════════════════════════════════════════════════════════ */
+.ana-sub-nav {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 0 12px 0;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+.ana-sub-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--text-secondary, #94a3b8);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.ana-sub-btn:hover {
+  background: var(--bg-card-hover);
+  color: var(--text-primary);
+}
+.ana-sub-btn.active {
+  background: var(--accent, #638cff);
+  color: #fff;
+  border-color: var(--accent, #638cff);
+}
+.ana-sub-nav-spacer { flex: 1; }
+.ana-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-secondary, #cbd5e1);
+  cursor: pointer;
+  user-select: none;
+  padding: 0 6px;
+}
+.ana-toggle input[type="checkbox"] { cursor: pointer; margin: 0; }
+
+.ana-content { width: 100%; }
+.ana-tab-panel { display: none; }
+.ana-tab-panel.active { display: block; }
+.ana-empty {
+  padding: 24px;
+  text-align: center;
+  color: var(--text-muted, #94a3b8);
+}
+.ana-empty-text {
+  padding: 16px;
+  text-align: center;
+  color: var(--text-muted, #94a3b8);
+  font-style: italic;
+}
+
+/* KPI row */
+.ana-kpi-row {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+.ana-kpi {
+  flex: 1 1 220px;
+  min-width: 200px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.ana-kpi-accent {
+  border-color: var(--accent, #638cff);
+  background: linear-gradient(180deg, var(--bg-card-hover) 0%, var(--bg-card) 100%);
+}
+.ana-kpi-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted, #94a3b8);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+.ana-kpi-val {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+.ana-kpi-hint {
+  font-size: 10.5px;
+  color: var(--text-muted, #94a3b8);
+}
+
+/* Chart wrapper */
+.ana-chart-wrapper {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  height: 320px;
+  margin-bottom: 16px;
+}
+
+/* Tabella */
+.ana-table-wrapper {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: auto;
+  /* Altezza dinamica: prende lo spazio rimanente tra il chart e il fondo finestra.
+     580px ≈ header app + tab bar + sub-nav + KPI row + chart + margini.
+     min-height per garantire usabilità anche su finestre piccole. */
+  max-height: calc(100vh - 580px);
+  min-height: 320px;
+}
+.ana-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.ana-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--bg-card-hover);
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+  text-align: left;
+  color: var(--text-primary);
+}
+.ana-table thead th.ana-num { text-align: right; }
+.ana-table tbody td {
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-primary);
+}
+.ana-table tbody td.ana-num { text-align: right; }
+.ana-table tbody tr:hover td { background: rgba(99, 140, 255, 0.05); }
+.ana-cell-commessa { font-weight: 500; }
+.ana-totale-row td {
+  background: var(--bg-card-hover) !important;
+  font-weight: 700;
+  border-top: 2px solid var(--border);
+}
+.ana-totale-row td.ana-num { text-align: right; }
+/* Specificità doppia (.ana-table tbody td.ana-num.ana-delta-XXX) per battere
+   la regola color:var(--text-primary) di .ana-table tbody td. */
+.ana-table tbody td.ana-delta-pos,
+.ana-table tfoot td.ana-delta-pos,
+.ana-kpi-val.ana-delta-pos,
+.ana-kpi-hint.ana-delta-pos { color: var(--success, #22c55e) !important; }
+.ana-table tbody td.ana-delta-neg,
+.ana-table tfoot td.ana-delta-neg,
+.ana-kpi-val.ana-delta-neg,
+.ana-kpi-hint.ana-delta-neg { color: var(--danger, #ef4444) !important; }
+.ana-table tbody td.ana-delta-zero,
+.ana-table tfoot td.ana-delta-zero,
+.ana-kpi-val.ana-delta-zero,
+.ana-kpi-hint.ana-delta-zero { color: var(--text-muted, #94a3b8) !important; }
+/* Header sortable */
+.ana-table thead th.ana-th-sort {
+  cursor: pointer;
+  user-select: none;
+}
+.ana-table thead th.ana-th-sort:hover {
+  background: rgba(99, 140, 255, 0.12);
+}
+.ana-table thead th.ana-th-active {
+  color: var(--accent, #638cff);
 }

@@ -221,11 +221,145 @@ function addScenarioSection(doc, y, data, scenarioName, periodo) {
     return (_at?.finalY ?? doc.lastAutoTable?.finalY ?? y) + 4;
 }
 
-// ─── Sezione: Economics (costi risorse per commessa) ─────────
-function addEconomicsSection(doc, y, resourceData, scenarioName, periodo) {
+/**
+ * Forza l'attivazione del sub-tab "Economics" dentro Risorse e aspetta il rendering.
+ * Ritorna lo stato precedente per ripristinarlo dopo la cattura.
+ */
+async function _activateEconomicsTab() {
+    const tabBtn = document.querySelector('.tab-btn[data-tab="risorse"]');
+    const subBtn = document.querySelector('.res-sub-btn[data-restab="commesse"]');
+    if (!tabBtn || !subBtn) return null;
+
+    const prevTab = document.querySelector('.tab-btn.active')?.dataset.tab || null;
+    const prevSubTab = document.querySelector('.res-sub-btn.active')?.dataset.restab || null;
+
+    // Switch tab principale e sub-tab
+    if (prevTab !== 'risorse') tabBtn.click();
+    await new Promise(r => setTimeout(r, 200));
+    if (prevSubTab !== 'commesse') subBtn.click();
+    // Attesa rendering completo (renderResourceTab + dati async)
+    await new Promise(r => setTimeout(r, 800));
+
+    return { prevTab, prevSubTab };
+}
+
+function _restoreTabState(state) {
+    if (!state) return;
+    try {
+        if (state.prevSubTab && state.prevSubTab !== 'commesse') {
+            document.querySelector(`.res-sub-btn[data-restab="${state.prevSubTab}"]`)?.click();
+        }
+        if (state.prevTab && state.prevTab !== 'risorse') {
+            document.querySelector(`.tab-btn[data-tab="${state.prevTab}"]`)?.click();
+        }
+    } catch (e) { /* ignore */ }
+}
+
+// ─── Sezione: Economics (snapshot fedele del pannello HTML via html2canvas) ─
+async function addEconomicsSection(doc, y, resourceData, scenarioName, periodo) {
     y = addSectionTitle(doc, y, 'Economics — Costi Risorse per Commessa');
 
-    const { commesse, persone, allocazioni, dateRange, getEffectiveDates } = resourceData;
+    // Auto-switch a Risorse → Economics se non attivo, e attendi rendering
+    const tabState = await _activateEconomicsTab();
+
+    const container = document.getElementById('res-tab-commesse');
+    const visible = container && container.offsetWidth > 0 && container.offsetHeight > 0;
+
+    if (!visible) {
+        // Fallback: tabella riassuntiva semplificata se il pannello Economics
+        // non è disponibile (es. utente non in Risorse o pannello non renderizzato)
+        _restoreTabState(tabState);
+        return _addEconomicsSummaryTable(doc, y, resourceData);
+    }
+
+    try {
+        // Iteriamo card-per-card: ogni commessa va su una pagina dedicata
+        // così non viene tagliata a metà. Il "Totale complessivo" usa la
+        // stessa classe .res-commessa-card → finirà anch'esso su pagina propria.
+        const cards = Array.from(container.querySelectorAll('.res-commessa-card'));
+        if (cards.length === 0) {
+            _restoreTabState(tabState);
+            return _addEconomicsSummaryTable(doc, y, resourceData);
+        }
+
+        const imgWidth = CONTENT_W;
+        const pageContentHeight = CONTENT_BOTTOM - CONTENT_TOP;
+
+        for (let i = 0; i < cards.length; i++) {
+            const card = cards[i];
+
+            const canvas = await html2canvas(card, {
+                scale: 2,
+                backgroundColor: '#ffffff',
+                useCORS: true,
+                logging: false,
+                windowWidth: card.scrollWidth,
+                windowHeight: card.scrollHeight,
+            });
+
+            const imgHeight = (canvas.height * imgWidth) / canvas.width;
+
+            // Prima card: prova a stare sulla pagina del titolo se c'è spazio sufficiente,
+            // altrimenti nuova pagina. Dalla seconda in poi: sempre nuova pagina.
+            if (i === 0) {
+                const availOnFirstPage = CONTENT_BOTTOM - y;
+                if (imgHeight > availOnFirstPage && availOnFirstPage < pageContentHeight * 0.6) {
+                    y = newPageWithHeader(doc, 'Economics', scenarioName, periodo);
+                }
+            } else {
+                y = newPageWithHeader(doc, 'Economics', scenarioName, periodo);
+            }
+
+            const availOnCurrentPage = CONTENT_BOTTOM - y;
+
+            if (imgHeight <= availOnCurrentPage) {
+                // La card sta tutta in una pagina
+                doc.addImage(canvas.toDataURL('image/jpeg', 0.92), 'JPEG', MARGIN, y, imgWidth, imgHeight);
+                y += imgHeight + 4;
+            } else {
+                // Card troppo alta per una pagina: split in slice su più pagine consecutive
+                let positionPx = 0;
+                let firstSlice = true;
+
+                while (positionPx < canvas.height) {
+                    if (!firstSlice) {
+                        y = newPageWithHeader(doc, 'Economics', scenarioName, periodo);
+                    }
+                    const availPx = firstSlice
+                        ? Math.floor(((CONTENT_BOTTOM - y) * canvas.width) / imgWidth)
+                        : Math.floor((pageContentHeight * canvas.width) / imgWidth);
+                    const sliceH = Math.min(availPx, canvas.height - positionPx);
+
+                    const sliceCanvas = document.createElement('canvas');
+                    sliceCanvas.width = canvas.width;
+                    sliceCanvas.height = sliceH;
+                    const ctx = sliceCanvas.getContext('2d');
+                    ctx.fillStyle = '#ffffff';
+                    ctx.fillRect(0, 0, sliceCanvas.width, sliceH);
+                    ctx.drawImage(canvas, 0, -positionPx);
+
+                    const sliceImgHeight = (sliceH * imgWidth) / canvas.width;
+                    doc.addImage(sliceCanvas.toDataURL('image/jpeg', 0.92), 'JPEG', MARGIN, y, imgWidth, sliceImgHeight);
+
+                    positionPx += sliceH;
+                    y += sliceImgHeight + 4;
+                    firstSlice = false;
+                }
+            }
+        }
+
+        _restoreTabState(tabState);
+        return y;
+    } catch (err) {
+        console.warn('[reportGenerator] Economics snapshot failed, fallback a tabella:', err);
+        _restoreTabState(tabState);
+        return _addEconomicsSummaryTable(doc, y, resourceData);
+    }
+}
+
+// ─── Fallback: tabella riassuntiva (se snapshot non disponibile) ─────────
+function _addEconomicsSummaryTable(doc, y, resourceData) {
+    const { commesse, persone, allocazioni, dateRange } = resourceData;
 
     let grandTeorico = 0, grandProb = 0;
     const rows = [];
@@ -242,7 +376,6 @@ function addEconomicsSection(doc, y, resourceData, scenarioName, periodo) {
             const di = a.dataInizio;
             const df = a.dataFine;
             if (!di || !df) continue;
-            // Calcola mesi nel range
             let mesi = 0;
             let cur = di;
             while (cur <= df) {
@@ -270,8 +403,6 @@ function addEconomicsSection(doc, y, resourceData, scenarioName, periodo) {
             grandProb += costoCommProb;
         }
     }
-
-    // Riga totale
     rows.push(['', 'TOTALE', '', '', fmtEuro(grandTeorico), fmtEuro(grandProb)]);
 
     const _at = autoTable(doc, {
@@ -291,7 +422,6 @@ function addEconomicsSection(doc, y, resourceData, scenarioName, periodo) {
             5: { cellWidth: 45, halign: 'right' },
         },
         didParseCell: (data) => {
-            // Bold last row (totale)
             if (data.section === 'body' && data.row.index === rows.length - 1) {
                 data.cell.styles.fontStyle = 'bold';
                 data.cell.styles.fillColor = COLORS.headerBg;
@@ -555,7 +685,7 @@ export async function generateReport(options) {
     if (sections.economics && resourceData) {
         progress(10 + (done / totalSections) * 70, 'Sezione Economics...');
         let y = newPageWithHeader(doc, 'Economics', scenarioName, periodo);
-        y = addEconomicsSection(doc, y, resourceData, scenarioName, periodo);
+        y = await addEconomicsSection(doc, y, resourceData, scenarioName, periodo);
         done++;
     }
 
