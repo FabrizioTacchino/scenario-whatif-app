@@ -313,7 +313,7 @@ export function computeScenario(commesse, monthlyData, scenario = {}, filters = 
             if (filters.dateFrom && m.month < filters.dateFrom) continue;
             if (filters.dateTo && m.month > filters.dateTo) continue;
             allMonthsSet.add(m.month);
-            if (!baselineAgg[m.month]) baselineAgg[m.month] = { vdp: 0, margine: 0, actual: 0, remaining: 0 };
+            if (!baselineAgg[m.month]) baselineAgg[m.month] = { vdp: 0, margine: 0, actual: 0, remaining: 0, storno: 0 };
 
             const baseMargine = (m.vdpAOP || 0) * (m.marginePerc != null ? m.marginePerc : (comm.margineAOP || 0));
 
@@ -321,6 +321,10 @@ export function computeScenario(commesse, monthlyData, scenario = {}, filters = 
             baselineAgg[m.month].margine += baseMargine;
             baselineAgg[m.month].actual += (m.vdpActual || 0);
             baselineAgg[m.month].remaining += (m.vdpRemaining || 0);
+            // Quota "storno": margine generato da una commessa la cui VDP del mese
+            // è negativa (rettifica). Lì margine = VDP × margine% può avere segno
+            // opposto a quello reale ⇒ va isolato dal margine "vero".
+            if ((m.vdpAOP || 0) < 0) baselineAgg[m.month].storno += baseMargine;
 
             baseVdpTot += (m.vdpAOP || 0);
             baseMarTot += baseMargine;
@@ -331,12 +335,14 @@ export function computeScenario(commesse, monthlyData, scenario = {}, filters = 
             if (filters.dateFrom && m.month < filters.dateFrom) continue;
             if (filters.dateTo && m.month > filters.dateTo) continue;
             allMonthsSet.add(m.month);
-            if (!scenarioAgg[m.month]) scenarioAgg[m.month] = { vdp: 0, margine: 0, actual: 0, remaining: 0 };
+            if (!scenarioAgg[m.month]) scenarioAgg[m.month] = { vdp: 0, margine: 0, actual: 0, remaining: 0, storno: 0 };
 
             scenarioAgg[m.month].vdp += m.vdp;
             scenarioAgg[m.month].margine += m.margine;
             scenarioAgg[m.month].actual += (m.actual || 0);
             scenarioAgg[m.month].remaining += (m.remaining || 0);
+            // Quota "storno": vedi nota nell'aggregazione baseline.
+            if ((m.vdp || 0) < 0) scenarioAgg[m.month].storno += m.margine;
 
             scenVdpTot += m.vdp;
             scenMarTot += m.margine;
@@ -388,6 +394,11 @@ export function computeScenario(commesse, monthlyData, scenario = {}, filters = 
 
         baselineMargine: (baselineAgg[m] || {}).margine || 0,
         scenarioMargine: (scenarioAgg[m] || {}).margine || 0,
+
+        // Quota del margine derivante da mesi-commessa con VDP negativa (storno).
+        // Serve a separare visivamente il margine "reale" dall'artefatto di segno.
+        baselineStornoMargine: (baselineAgg[m] || {}).storno || 0,
+        scenarioStornoMargine: (scenarioAgg[m] || {}).storno || 0,
     }));
 
     // KPIs

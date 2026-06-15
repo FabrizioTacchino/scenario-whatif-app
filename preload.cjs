@@ -25,4 +25,7 @@ contextBridge.exposeInMainWorld('updaterAPI', {
     onReady:    (cb) => ipcRenderer.on('updater:ready',    ()           => cb()),
     onError:    (cb) => ipcRenderer.on('updater:error',    (_, msg)     => cb(msg)),
     install:    ()   => ipcRenderer.invoke('updater:install'),
+    // Segnala al main che il renderer ha registrato gli ascoltatori updater:
+    // il main rimanderà l'ultimo stato noto, così il banner non si perde mai.
+    notifyReady: ()  => ipcRenderer.send('updater:renderer-ready'),
 });

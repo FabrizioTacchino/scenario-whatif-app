@@ -3397,9 +3397,67 @@ function _exportRisorse() {
         XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(commRows), 'Riepilogo Commesse');
     }
 
+    // Sheet 5 — Allocazioni Mensili (formato lungo: 1 riga per persona × commessa × mese)
+    //   Per il controllo di gestione: colonna "Mese" esplicita e filtrabile in Excel.
+    //   Riusa la matrice già calcolata (date effettive + clamp contrattuale) e
+    //   rispetta il filtro periodo attivo, senza toccare i fogli precedenti.
+    const dateRange = _ctx.getDateRange ? _ctx.getDateRange() : {};
+    const inPeriodo = (m) =>
+        (!dateRange.from || m >= dateRange.from) &&
+        (!dateRange.to   || m <= dateRange.to);
+
+    const personaById = new Map(persone.map(p => [p.id, p]));
+    const mensiliRows = [];
+    for (const [personaId, pMap] of matrix) {
+        const p = personaById.get(personaId);
+        if (!p) continue;
+        for (const mese of [...pMap.keys()].filter(inPeriodo).sort()) {
+            const cell = pMap.get(mese);
+            for (const al of cell.allocazioni) {
+                const c = commesse.find(x => x.codice === al.codiceCommessa);
+                mensiliRows.push({
+                    'Mese': mese,
+                    'Cognome': p.cognome || '',
+                    'Nome': p.nome || '',
+                    'Ruolo': p.ruolo || '',
+                    'Società': p.societa || '',
+                    'BU': p.bu || '',
+                    'CDC': p.cdc || '',
+                    'Codice Commessa': al.codiceCommessa,
+                    'Nome Commessa': al.nomeCommessa || c?.nome || '',
+                    'Tipo': al.tipo || c?.tipo || '',
+                    '% Allocazione': al.percentuale,
+                    'FTE': Math.round((al.percentuale / 100) * 100) / 100,
+                    'Costo Mese (€)': Math.round(al.costo),
+                    'Prob. Commessa %': c?.probabilita ?? 100,
+                    'Costo Mese Probabilizzato (€)': Math.round(al.costoProb),
+                });
+            }
+        }
+    }
+    // Ordine comodo per il controllo di gestione: Mese → Commessa → Cognome
+    mensiliRows.sort((a, b) =>
+        a['Mese'].localeCompare(b['Mese']) ||
+        String(a['Codice Commessa']).localeCompare(String(b['Codice Commessa'])) ||
+        String(a['Cognome']).localeCompare(String(b['Cognome']))
+    );
+    if (mensiliRows.length) {
+        // Etichetta periodo: stessa dicitura del menu a tendina (badge filtro).
+        const periodoLabel = (() => {
+            if (!dateRange.from && !dateRange.to) return 'Tutto il periodo';
+            if (dateRange.from && dateRange.to) return `${formatYM(dateRange.from)} → ${formatYM(dateRange.to)}`;
+            if (dateRange.from) return `Da ${formatYM(dateRange.from)}`;
+            return `Fino a ${formatYM(dateRange.to)}`;
+        })();
+        // Nota in alto (riga 1) + tabella a partire dalla riga 3 → resta filtrabile.
+        const ws = XLSX.utils.aoa_to_sheet([[`* Periodo esportato: ${periodoLabel}`], []]);
+        XLSX.utils.sheet_add_json(ws, mensiliRows, { origin: 'A3' });
+        XLSX.utils.book_append_sheet(wb, ws, 'Allocazioni Mensili');
+    }
+
     const date = new Date().toISOString().slice(0, 10);
     XLSX.writeFile(wb, `Risorse_${date}.xlsx`);
-    _showToast('Export Excel completato');
+    _showToast(mensiliRows.length ? 'Export Excel completato (incl. Allocazioni Mensili)' : 'Export Excel completato');
 }
 
 // ─── MODAL HELPERS ────────────────────────────────────────────

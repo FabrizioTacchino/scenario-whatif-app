@@ -400,6 +400,20 @@ function createWindow() {
 let updateDownloaded = false;
 let pendingInstallerPath = null;  // path del file installer scaricato
 
+// Ultimo stato updater notificato al renderer. Serve a NON perdere il banner:
+// se il check trova un aggiornamento prima che il renderer abbia registrato gli
+// ascoltatori (avvio lento), il send va a vuoto. Salvando qui l'ultimo stato lo
+// possiamo rimandare appena il renderer segnala di essere pronto.
+// Forma: { channel: 'updater:start'|'updater:progress'|'updater:ready'|'updater:error', arg }
+let _lastUpdaterEvent = null;
+
+// Invia un evento updater al renderer e ne memorizza l'ultimo stato per il replay.
+function _sendUpdater(channel, arg) {
+    _lastUpdaterEvent = { channel, arg };
+    const win = BrowserWindow.getAllWindows()[0];
+    if (win) win.webContents.send(channel, arg);
+}
+
 // Inizializza aggiornamenti automatici (solo in produzione)
 if (app.isPackaged) {
     setupUpdater();
@@ -426,13 +440,11 @@ function setupUpdater() {
     autoUpdater.on('update-available', (info) => {
         autoUpdater._manualCheck = false;
         // Download parte in automatico — avvisa il renderer tramite banner
-        const win = BrowserWindow.getAllWindows()[0];
-        if (win) win.webContents.send('updater:start', info.version);
+        _sendUpdater('updater:start', info.version);
     });
 
     autoUpdater.on('download-progress', (progress) => {
-        const win = BrowserWindow.getAllWindows()[0];
-        if (win) win.webContents.send('updater:progress', Math.floor(progress.percent));
+        _sendUpdater('updater:progress', Math.floor(progress.percent));
     });
 
     autoUpdater.on('update-downloaded', (info) => {
@@ -440,14 +452,24 @@ function setupUpdater() {
         pendingInstallerPath = info.downloadedFile || null;
         log.info('[update-downloaded] downloadedFile:', pendingInstallerPath);
         log.info('[update-downloaded] info keys:', Object.keys(info));
-        const win = BrowserWindow.getAllWindows()[0];
-        if (win) win.webContents.send('updater:ready');
+        _sendUpdater('updater:ready');
     });
 
     autoUpdater.on('error', (err) => {
         log.error('Errore aggiornamento:', err);
-        const w = BrowserWindow.getAllWindows()[0];
-        if (w) w.webContents.send('updater:error', err.message || String(err));
+        _sendUpdater('updater:error', err.message || String(err));
+    });
+
+    // Il renderer segnala di aver registrato gli ascoltatori del banner: gli
+    // rimandiamo l'ultimo stato updater noto, così un eventuale evento arrivato
+    // durante un avvio lento non viene perso.
+    ipcMain.on('updater:renderer-ready', (event) => {
+        if (!_lastUpdaterEvent) return;
+        try {
+            event.sender.send(_lastUpdaterEvent.channel, _lastUpdaterEvent.arg);
+        } catch (e) {
+            log.warn('[updater] replay al renderer fallito:', e.message);
+        }
     });
 
     autoUpdater.checkForUpdates();

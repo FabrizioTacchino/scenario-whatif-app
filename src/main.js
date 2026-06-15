@@ -1905,6 +1905,28 @@ const chartColors = {
     deltaNeg:  { bg: 'rgba(240, 173, 173, 0.55)',  border: '#F0ADAD' },
 };
 
+// Colore di "attenzione" per i mesi con VDP negativa (vedi grafico Margine Mensile)
+const WARN_COLOR = '#E8A838';
+
+// Crea un riempimento a tratteggio diagonale (CanvasPattern) usato per evidenziare
+// le barre dei mesi con VDP negativa, dove margine = VDP × margine% può risultare
+// positivo pur essendo solo lo storno di una commessa in perdita.
+function hatchPattern(stroke = WARN_COLOR, bg = 'rgba(232, 168, 56, 0.22)') {
+    const c = document.createElement('canvas');
+    c.width = 8; c.height = 8;
+    const cx = c.getContext('2d');
+    cx.fillStyle = bg;
+    cx.fillRect(0, 0, 8, 8);
+    cx.strokeStyle = stroke;
+    cx.lineWidth = 1.5;
+    cx.beginPath();
+    cx.moveTo(0, 8); cx.lineTo(8, 0);
+    cx.moveTo(-2, 2); cx.lineTo(2, -2);
+    cx.moveTo(6, 10); cx.lineTo(10, 6);
+    cx.stroke();
+    return cx.createPattern(c, 'repeat');
+}
+
 // Palette for Details stacked charts (one color per commessa)
 const DETAILS_PALETTE = [
     { bg: 'rgba(59,  130, 246, 0.80)', border: '#3B82F6' },
@@ -2079,45 +2101,86 @@ function renderCharts(monthly, commessaResults = []) {
 
 
 
-    // 3. Margin Monthly (bar) - struttura identica a VDP (3 dataset, 2 stack)
-    //    per garantire larghezza barre e scala X esattamente uguali
+    // 3. Margin Monthly (bar) — stack scenario/baseline diviso in "reale" + "storno".
+    //    Dove una commessa ha VDP del mese negativa, margine = VDP × margine%
+    //    assume segno opposto a quello reale: a livello aggregato resta sepolto nel
+    //    totale e "sembra" margine. Lo isoliamo come segmento tratteggiato ambra,
+    //    impilato sopra il margine reale. I totali NON cambiano (reale + storno =
+    //    margine del mese), cambia solo la lettura del grafico.
+    const baseStorno = monthly.map(m => m.baselineStornoMargine || 0);
+    const scenStorno = monthly.map(m => m.scenarioStornoMargine || 0);
+    const baseReal   = monthly.map(m => (m.baselineMargine || 0) - (m.baselineStornoMargine || 0));
+    const scenReal   = monthly.map(m => (m.scenarioMargine || 0) - (m.scenarioStornoMargine || 0));
+    const baseWarn = monthly.map(m => (m.baselineStornoMargine || 0) !== 0);
+    const scenWarn = monthly.map(m => (m.scenarioStornoMargine || 0) !== 0);
+    const anyWarn  = monthly.map((m, i) => baseWarn[i] || scenWarn[i]);
+    const hasBaseStorno = baseStorno.some(v => v !== 0);
+    const hasScenStorno = scenStorno.some(v => v !== 0);
+    const warnHatch = hatchPattern();
+
+    const marginDatasets = [
+        {
+            label: 'Baseline',
+            data: baseReal,
+            backgroundColor: chartColors.baseline.bg,
+            borderColor: chartColors.baseline.border,
+            borderWidth: 1,
+            stack: 'base'
+        },
+        {
+            label: 'Scenario (Actual)',
+            data: scenReal.map((v, i) => i <= lastActualIdx ? v : null),
+            backgroundColor: chartColors.actual.bg,
+            borderColor: chartColors.actual.border,
+            borderWidth: 1,
+            stack: 'scen'
+        },
+        {
+            label: 'Scenario (Remaining)',
+            data: scenReal.map((v, i) => i > lastActualIdx ? v : null),
+            backgroundColor: chartColors.remaining.bg,
+            borderColor: chartColors.remaining.border,
+            borderWidth: 1,
+            stack: 'scen'
+        }
+    ];
+    // I segmenti "storno" compaiono solo se esistono, per non sporcare la legenda.
+    if (hasBaseStorno) {
+        marginDatasets.push({
+            label: 'Storno baseline (VDP neg.)',
+            data: baseStorno,
+            backgroundColor: warnHatch,
+            borderColor: WARN_COLOR,
+            borderWidth: 1,
+            stack: 'base'
+        });
+    }
+    if (hasScenStorno) {
+        marginDatasets.push({
+            label: 'Storno (VDP negativa)',
+            data: scenStorno,
+            backgroundColor: warnHatch,
+            borderColor: WARN_COLOR,
+            borderWidth: 1,
+            stack: 'scen'
+        });
+    }
+
     charts.marginMonthly = new Chart($('#chart-margin-monthly'), {
         type: 'bar',
-        data: {
-            labels,
-            datasets: [
-                {
-                    label: 'Baseline',
-                    data: monthly.map(m => m.baselineMargine),
-                    backgroundColor: chartColors.baseline.bg,
-                    borderColor: chartColors.baseline.border,
-                    borderWidth: 1,
-                    stack: 'base'
-                },
-                {
-                    label: 'Scenario (Actual)',
-                    data: monthly.map((m, i) => i <= lastActualIdx ? m.scenarioMargine : null),
-                    backgroundColor: chartColors.actual.bg,
-                    borderColor: chartColors.actual.border,
-                    borderWidth: 1,
-                    stack: 'scen'
-                },
-                {
-                    label: 'Scenario (Remaining)',
-                    data: monthly.map((m, i) => i > lastActualIdx ? m.scenarioMargine : null),
-                    backgroundColor: chartColors.remaining.bg,
-                    borderColor: chartColors.remaining.border,
-                    borderWidth: 1,
-                    stack: 'scen'
-                }
-            ],
-        },
+        data: { labels, datasets: marginDatasets },
         options: (() => {
             const o = makeCommonOpts();
             o.scales.x.stacked = true;
-            // y.stacked volutamente NON impostato: con due stack separati (base/scen)
-            // e un dataset per stack, non serve la somma verticale.
-            // beginAtZero:true è già impostato in makeCommonOpts.
+            // Ora ogni stack (base/scen) può avere 2 segmenti (reale + storno):
+            // serve la somma verticale. Gli stack diversi restano affiancati.
+            o.scales.y.stacked = true;
+            o.plugins.tooltip.callbacks.afterBody = (items) => {
+                const i = items && items.length ? items[0].dataIndex : null;
+                if (i == null || !anyWarn[i]) return '';
+                const s = (scenStorno[i] || 0) + (baseStorno[i] || 0);
+                return [`⚠ Mese con VDP negativa: ${formatEuro(s)} del margine`, 'è storno di commesse in perdita, non utile generato.'];
+            };
             return o;
         })(),
     });
@@ -2129,16 +2192,33 @@ function renderCharts(monthly, commessaResults = []) {
         cumBaseMar += m.baselineMargine; cumScenMar += m.scenarioMargine;
         cumBaseMarArr.push(cumBaseMar); cumScenMarArr.push(cumScenMar);
     }
+    // Evidenzia i punti in cui il cumulato "salta" per via di un mese con VDP
+    // negativa: il valore resta corretto, ma il gradino in su non è un utile,
+    // bensì lo storno di una commessa in perdita.
+    const cumPointStyle = (flags) => ({
+        pointRadius: flags.map(f => f ? 5 : 2),
+        pointBackgroundColor: flags.map(f => f ? WARN_COLOR : 'transparent'),
+        pointBorderColor: flags.map(f => f ? WARN_COLOR : undefined),
+    });
     charts.marginCum = new Chart($('#chart-margin-cumulative'), {
         type: 'line',
         data: {
             labels,
             datasets: [
-                { label: 'Baseline', data: cumBaseMarArr, borderColor: chartColors.baseline.border, backgroundColor: 'rgba(236,180,12,0.10)', fill: true, tension: 0.3, pointRadius: 2 },
-                { label: 'Scenario', data: cumScenMarArr, borderColor: chartColors.scenario.border, backgroundColor: 'rgba(8,160,69,0.10)', fill: true, tension: 0.3, pointRadius: 2 },
+                { label: 'Baseline', data: cumBaseMarArr, borderColor: chartColors.baseline.border, backgroundColor: 'rgba(236,180,12,0.10)', fill: true, tension: 0.3, ...cumPointStyle(baseWarn) },
+                { label: 'Scenario', data: cumScenMarArr, borderColor: chartColors.scenario.border, backgroundColor: 'rgba(8,160,69,0.10)', fill: true, tension: 0.3, ...cumPointStyle(scenWarn) },
             ],
         },
-        options: makeCommonOpts(),
+        options: (() => {
+            const o = makeCommonOpts();
+            o.plugins.tooltip.callbacks.afterBody = (items) => {
+                const i = items && items.length ? items[0].dataIndex : null;
+                if (i == null || !anyWarn[i]) return '';
+                const s = (scenStorno[i] || 0) + (baseStorno[i] || 0);
+                return [`⚠ VDP negativa nel mese: ${formatEuro(s)} del gradino`, 'è storno di commesse in perdita, non utile generato.'];
+            };
+            return o;
+        })(),
     });
 
 
@@ -2192,6 +2272,11 @@ function renderDetailsCharts(monthly, commessaResults = []) {
     const vdpDatasets = [];
     const marDatasets  = [];
 
+    // Storno: mesi-commessa con VDP negativa, dove margine = VDP × margine% non è
+    // margine reale. Li marchiamo col tratteggio ambra nel grafico Margine.
+    const warnHatch = hatchPattern();
+    const monthHasStorno = labels.map(() => false);
+
     commessaResults.forEach((comm, idx) => {
         const color = DETAILS_PALETTE[idx % DETAILS_PALETTE.length];
         const parts = [comm.codice, comm.nome].filter(Boolean);
@@ -2225,7 +2310,18 @@ function renderDetailsCharts(monthly, commessaResults = []) {
             stack:           'details',
         };
         vdpDatasets.push({ ...base, data: vdpData });
-        marDatasets.push({ ...base, data: marData });
+
+        // Nel grafico Margine: i mesi con VDP negativa di questa commessa vengono
+        // tratteggiati (ambra) invece del colore pieno, per segnalare lo storno.
+        const stornoFlags = labels.map(m => (byMonth[m]?.vdp || 0) < 0);
+        const hasStorno = stornoFlags.some(Boolean);
+        stornoFlags.forEach((f, i) => { if (f) monthHasStorno[i] = true; });
+        marDatasets.push({
+            ...base,
+            data: marData,
+            backgroundColor: hasStorno ? stornoFlags.map(f => f ? warnHatch : color.bg) : color.bg,
+            borderColor:     hasStorno ? stornoFlags.map(f => f ? WARN_COLOR : color.border) : color.border,
+        });
     });
 
     const makeOpts = () => ({
@@ -2278,11 +2374,17 @@ function renderDetailsCharts(monthly, commessaResults = []) {
         options: makeOpts(),
     });
 
+    const marOpts = makeOpts();
+    marOpts.plugins.tooltip.callbacks.afterBody = (items) => {
+        const i = items && items.length ? items[0].dataIndex : null;
+        if (i == null || !monthHasStorno[i]) return '';
+        return ['⚠ I segmenti tratteggiati sono storno (VDP negativa):', 'quota non rappresentativa del margine reale.'];
+    };
     charts.detailsMar = new Chart($('#chart-details-mar'), {
         type: 'bar',
         plugins: [stackedTotalPlugin],
         data: { labels, datasets: marDatasets },
-        options: makeOpts(),
+        options: marOpts,
     });
 
     // Render detail tables: if details is already open, render immediately.
@@ -2524,19 +2626,37 @@ function renderDetailsTypeCharts(monthly, commessaResults = []) {
         const type = comm.effectiveType || comm.type || 'Backlog';
         const bucket = TYPES.includes(type) ? type : 'Backlog';
         for (const sm of (comm.scenarioMonths || [])) {
-            if (!byTypeMonth[bucket][sm.month]) byTypeMonth[bucket][sm.month] = { vdp: 0, margine: 0 };
+            if (!byTypeMonth[bucket][sm.month]) byTypeMonth[bucket][sm.month] = { vdp: 0, margine: 0, storno: 0 };
             byTypeMonth[bucket][sm.month].vdp     += sm.vdp     || 0;
             byTypeMonth[bucket][sm.month].margine += sm.margine || 0;
+            // Quota storno: margine da commesse con VDP del mese negativa.
+            if ((sm.vdp || 0) < 0) byTypeMonth[bucket][sm.month].storno += sm.margine || 0;
         }
     }
 
     const vdpDatasets = [];
     const marDatasets  = [];
 
+    // Storno aggregato (somma su tutti i tipi) per ogni mese: lo mostriamo come
+    // un unico segmento tratteggiato ambra impilato sopra il margine reale.
+    const warnHatch = hatchPattern();
+    const stornoByMonth = labels.map(m => {
+        let s = 0;
+        for (const t of TYPES) s += byTypeMonth[t][m]?.storno || 0;
+        return s;
+    });
+    const hasAnyStorno = stornoByMonth.some(v => v !== 0);
+
     for (const type of TYPES) {
         const color = TYPE_COLORS[type];
-        const vdpData = labels.map(m => byTypeMonth[type][m]?.vdp     || null);
-        const marData = labels.map(m => byTypeMonth[type][m]?.margine || null);
+        const vdpData = labels.map(m => byTypeMonth[type][m]?.vdp || null);
+        // Margine "reale" del tipo = margine del mese meno la quota storno.
+        const marData = labels.map(m => {
+            const cell = byTypeMonth[type][m];
+            if (!cell) return null;
+            const real = (cell.margine || 0) - (cell.storno || 0);
+            return real !== 0 ? real : null;
+        });
 
         if (!vdpData.some(v => v != null) && !marData.some(v => v != null)) continue;
 
@@ -2549,6 +2669,17 @@ function renderDetailsTypeCharts(monthly, commessaResults = []) {
         };
         vdpDatasets.push({ ...base, data: vdpData });
         marDatasets.push({ ...base, data: marData });
+    }
+
+    if (hasAnyStorno) {
+        marDatasets.push({
+            label:           'Storno (VDP negativa)',
+            data:            stornoByMonth.map(v => v !== 0 ? v : null),
+            backgroundColor: warnHatch,
+            borderColor:     WARN_COLOR,
+            borderWidth:     1,
+            stack:           'type-details',
+        });
     }
 
     const makeOpts = () => ({
@@ -2605,11 +2736,17 @@ function renderDetailsTypeCharts(monthly, commessaResults = []) {
         options: makeOpts(),
     });
 
+    const marOpts = makeOpts();
+    marOpts.plugins.tooltip.callbacks.afterBody = (items) => {
+        const i = items && items.length ? items[0].dataIndex : null;
+        if (i == null || !stornoByMonth[i]) return '';
+        return ['⚠ La quota "Storno (VDP negativa)" è rettifica di commesse', 'in perdita, non margine reale del mese.'];
+    };
     charts.detailsTypeMar = new Chart($('#chart-details-type-mar'), {
         type: 'bar',
         plugins: [stackedTotalPlugin],
         data: { labels, datasets: marDatasets },
-        options: makeOpts(),
+        options: marOpts,
     });
 }
 
@@ -5183,4 +5320,9 @@ function setupUpdateBanner() {
     $('#btn-update-later')?.addEventListener('click', () => {
         banner.classList.add('hidden');
     });
+
+    // Ascoltatori registrati: avvisa il main che è pronto a ricevere eventi
+    // updater. Se un aggiornamento è già stato rilevato durante l'avvio lento,
+    // il main rimanderà ora quell'evento e il banner comparirà comunque.
+    window.updaterAPI.notifyReady?.();
 }
