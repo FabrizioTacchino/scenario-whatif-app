@@ -926,26 +926,59 @@ async function _loadAdminUserList() {
     if (!container) return;
     try {
         const users = await listUsers();
-        container.innerHTML = users.map(u => `
-            <div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border);font-size:12px;">
-                <span style="flex:1;overflow:hidden;text-overflow:ellipsis;">${u.email || u.user_id.substring(0, 12) + '...'}</span>
-                <select data-uid="${u.user_id}" class="role-select" style="font-size:11px;padding:2px 4px;border-radius:4px;border:1px solid var(--border);background:var(--bg-2);color:var(--text);">
-                    <option value="admin" ${u.role === 'admin' ? 'selected' : ''}>Admin</option>
-                    <option value="editor" ${u.role === 'editor' ? 'selected' : ''}>Editor</option>
-                    <option value="hr" ${u.role === 'hr' ? 'selected' : ''}>HR</option>
-                    <option value="commercial" ${u.role === 'commercial' ? 'selected' : ''}>Commercial</option>
-                    <option value="tester" ${u.role === 'tester' ? 'selected' : ''}>Tester</option>
-                    <option value="viewer" ${u.role === 'viewer' ? 'selected' : ''}>Viewer</option>
-                </select>
-            </div>
-        `).join('');
+
+        // Costruzione con l'API del DOM invece che con innerHTML: l'email arriva
+        // dal cloud, cioè da un altro utente, e finiva interpolata grezza.
+        const RUOLI = [
+            ['admin', 'Admin'], ['editor', 'Editor'], ['hr', 'HR'],
+            ['commercial', 'Commercial'], ['tester', 'Tester'], ['viewer', 'Viewer'],
+            ['disabled', 'Disattivato — nessun accesso ai dati'],
+        ];
+        container.textContent = '';
+        for (const u of users) {
+            const riga = document.createElement('div');
+            riga.style.cssText = 'display:flex;align-items:center;justify-content:space-between;'
+                + 'padding:6px 0;border-bottom:1px solid var(--border);font-size:12px;';
+
+            const etichetta = document.createElement('span');
+            etichetta.style.cssText = 'flex:1;overflow:hidden;text-overflow:ellipsis;';
+            etichetta.textContent = u.email || (u.user_id || '').substring(0, 12) + '...';
+            if (u.role === 'disabled') etichetta.style.opacity = '.55';
+            riga.appendChild(etichetta);
+
+            const sel = document.createElement('select');
+            sel.className = 'role-select';
+            sel.dataset.uid = u.user_id;
+            sel.style.cssText = 'font-size:11px;padding:2px 4px;border-radius:4px;'
+                + 'border:1px solid var(--border);background:var(--bg-2);color:var(--text);';
+            for (const [valore, testo] of RUOLI) {
+                const opt = document.createElement('option');
+                opt.value = valore;
+                opt.textContent = testo;
+                if (u.role === valore) opt.selected = true;
+                sel.appendChild(opt);
+            }
+            riga.appendChild(sel);
+            container.appendChild(riga);
+        }
 
         container.querySelectorAll('.role-select').forEach(sel => {
             sel.addEventListener('change', async (e) => {
+                const nuovo = e.target.value;
+                if (nuovo === 'disabled' &&
+                    !confirm('Disattivare questo utente?\n\nNon potrà più leggere anagrafica, '
+                           + 'costi, scenari e allocazioni. Potrà ancora accedere, ma non vedrà '
+                           + 'alcun dato.\n\nÈ reversibile: basta riassegnargli un ruolo.')) {
+                    _loadAdminUserList();
+                    return;
+                }
                 try {
-                    await updateUserRole(e.target.dataset.uid, e.target.value);
+                    await updateUserRole(e.target.dataset.uid, nuovo);
+                    notify.successo(nuovo === 'disabled'
+                        ? 'Utente disattivato: non ha più accesso ai dati.'
+                        : 'Ruolo aggiornato.');
                 } catch (err) {
-                    alert('Errore nel cambio ruolo: ' + err.message);
+                    notify.errore('Cambio ruolo non riuscito.', { dettaglio: err.message });
                     _loadAdminUserList(); // Reload to reset
                 }
             });
