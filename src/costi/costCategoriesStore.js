@@ -25,6 +25,24 @@
 import { COST_CATEGORIES as SEED_CATEGORIES } from './costCategories.js';
 import { supabase } from '../supabaseClient.js';
 import { getCurrentRole, getSyncStatus, onSyncStatusChange } from '../syncManager.js';
+import { safeSetItem } from '../storage.js';
+
+// Il modulo reagiva a QUALSIASI stato "connected" — quindi a ogni push riuscito del
+// polling — con una query su app_config: decine al minuto. Ora si muove solo alla
+// transizione disconnesso -> connesso, con una soglia minima fra due letture.
+let _eraConnesso = false;
+let _ultimaLettura = 0;
+const _INTERVALLO_MIN_MS = 60000;
+
+function _vaLetto(statoConnesso) {
+    const adesso = Date.now();
+    const transizione = statoConnesso && !_eraConnesso;
+    _eraConnesso = statoConnesso;
+    if (!transizione) return false;
+    if (adesso - _ultimaLettura < _INTERVALLO_MIN_MS) return false;
+    _ultimaLettura = adesso;
+    return true;
+}
 
 const STORAGE_KEY = 'whatif_cost_categories';
 const APP_CONFIG_KEY = 'cost_categories';
@@ -40,7 +58,7 @@ function loadOverride() {
 
 function saveOverride(categories) {
     try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(categories));
+        safeSetItem(STORAGE_KEY, JSON.stringify(categories));
     } catch (e) {
         console.warn('[costCategoriesStore] save failed:', e);
     }
@@ -212,7 +230,7 @@ export async function pullCategoriesFromCloud() {
         if (localStr !== cloudStr) {
             _isApplyingRemote = true;
             try {
-                localStorage.setItem(STORAGE_KEY, JSON.stringify(arr));
+                safeSetItem(STORAGE_KEY, JSON.stringify(arr));
                 if (typeof window !== 'undefined') {
                     window.dispatchEvent(new CustomEvent('whatif:costCategoriesChanged'));
                 }
@@ -263,7 +281,9 @@ function startCategoriesRealtime() {
                     console.info('[Realtime] cost_categories subscription active');
                 } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
                     console.warn('[Realtime] cost_categories subscription error:', status);
-                    _realtimeChannel = null;
+                    // Azzerare il riferimento senza rimuovere il canale lasciava il
+                    // socket aperto: a ogni nuovo tentativo se ne accumulava un altro.
+                    stopCategoriesRealtime();
                 }
             });
     } catch (err) {
@@ -308,10 +328,13 @@ if (typeof window !== 'undefined') {
     queueMicrotask(tryStart);
     try {
         onSyncStatusChange((s) => {
-            if (s?.state === 'connected') {
-                pullCategoriesFromCloud();
+            const connesso = s?.state === 'connected';
+            if (connesso) {
+                // Solo alla transizione disconnesso -> connesso, non a ogni push riuscito
+                if (_vaLetto(true)) pullCategoriesFromCloud();
                 startCategoriesRealtime();
             } else if (s?.state === 'disconnected' || s?.state === 'error') {
+                _vaLetto(false);
                 stopCategoriesRealtime();
             }
         });

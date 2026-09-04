@@ -6,6 +6,7 @@
 
 import { trackDeletion } from './syncManager.js';
 import { getScenario } from './scenarioManager.js';
+import { safeSetItem, trackChange, trackChanges } from './storage.js';
 
 /**
  * Check if a scenario is locked. Returns true if locked.
@@ -46,7 +47,8 @@ export function saveRuolo(data) {
         const idx = all.findIndex(r => r.id === data.id);
         if (idx === -1) return null;
         all[idx] = { ...all[idx], ...data, updatedAt: now };
-        localStorage.setItem(RUOLI_KEY, JSON.stringify(all));
+        safeSetItem(RUOLI_KEY, JSON.stringify(all));
+        trackChange('ruolo', all[idx].id);
         return all[idx];
     }
 
@@ -67,7 +69,8 @@ export function saveRuolo(data) {
         updatedAt: now,
     };
     all.push(nuovo);
-    localStorage.setItem(RUOLI_KEY, JSON.stringify(all));
+    safeSetItem(RUOLI_KEY, JSON.stringify(all));
+    trackChange('ruolo', nuovo.id);
     return nuovo;
 }
 
@@ -75,7 +78,7 @@ export function deleteRuolo(id) {
     const all = listRuoli();
     const ruolo = all.find(r => r.id === id);
     const remaining = all.filter(r => r.id !== id);
-    localStorage.setItem(RUOLI_KEY, JSON.stringify(remaining));
+    safeSetItem(RUOLI_KEY, JSON.stringify(remaining));
     // Track deletion with name for cloud-side dedup cleanup
     trackDeletion('ruolo', id, ruolo?.nome);
 }
@@ -131,7 +134,8 @@ export function syncRuoliFromPersone() {
     }
 
     if (added > 0) {
-        localStorage.setItem(RUOLI_KEY, JSON.stringify(ruoli));
+        safeSetItem(RUOLI_KEY, JSON.stringify(ruoli));
+        trackChanges('ruolo', ruoli.slice(ruoli.length - added).map(r => r.id));
     }
     return added;
 }
@@ -159,7 +163,8 @@ export function listPersone() {
         }
 
         if (personaChanged) {
-            localStorage.setItem(PERSONE_KEY, JSON.stringify(persone));
+            safeSetItem(PERSONE_KEY, JSON.stringify(persone));
+            trackChanges('persona', persone.map(p => p.id));
             // Ripara anche le allocazioni che referenziano i vecchi id corrotti
             try {
                 const allocs = JSON.parse(localStorage.getItem(ALLOCAZIONI_KEY) || '[]');
@@ -171,7 +176,10 @@ export function listPersone() {
                     // Ripara allocazioni senza id (stesso bug)
                     if (!a.id) { a.id = genId(); allocChanged = true; }
                 }
-                if (allocChanged) localStorage.setItem(ALLOCAZIONI_KEY, JSON.stringify(allocs));
+                if (allocChanged) {
+                    safeSetItem(ALLOCAZIONI_KEY, JSON.stringify(allocs));
+                    trackChanges('allocazione', allocs.map(a => a.id));
+                }
             } catch { /* non bloccante */ }
         }
 
@@ -197,7 +205,8 @@ export function savePersona(data, origine = 'manuale') {
         if (updated.cognome) updated.cognome = updated.cognome.toUpperCase();
         if (updated.codiceFiscale) updated.codiceFiscale = updated.codiceFiscale.toUpperCase();
         persone[idx] = updated;
-        localStorage.setItem(PERSONE_KEY, JSON.stringify(persone));
+        safeSetItem(PERSONE_KEY, JSON.stringify(persone));
+        trackChange('persona', data.id);
         _audit('persona', data.id, 'update', old, updated, origine);
         return updated;
     }
@@ -223,19 +232,20 @@ export function savePersona(data, origine = 'manuale') {
     if (nuova.codiceFiscale) nuova.codiceFiscale = nuova.codiceFiscale.toUpperCase();
 
     persone.push(nuova);
-    localStorage.setItem(PERSONE_KEY, JSON.stringify(persone));
+    safeSetItem(PERSONE_KEY, JSON.stringify(persone));
+    trackChange('persona', nuova.id);
     _audit('persona', nuova.id, 'create', null, nuova, origine);
     return nuova;
 }
 
 export function deletePersona(id) {
     const persone = listPersone().filter(p => p.id !== id);
-    localStorage.setItem(PERSONE_KEY, JSON.stringify(persone));
+    safeSetItem(PERSONE_KEY, JSON.stringify(persone));
     // Track and remove related allocations
     const allAlloc = listAllocazioni();
     allAlloc.filter(a => a.personaId === id).forEach(a => trackDeletion('allocazione', a.id));
     const remaining = allAlloc.filter(a => a.personaId !== id);
-    localStorage.setItem(ALLOCAZIONI_KEY, JSON.stringify(remaining));
+    safeSetItem(ALLOCAZIONI_KEY, JSON.stringify(remaining));
     _audit('persona', id, 'delete', null, null, 'manuale');
 }
 
@@ -249,7 +259,10 @@ export function listAllocazioni(filters = {}) {
         for (const a of all) {
             if (!a.id) { a.id = genId(); changed = true; }
         }
-        if (changed) localStorage.setItem(ALLOCAZIONI_KEY, JSON.stringify(all));
+        if (changed) {
+            safeSetItem(ALLOCAZIONI_KEY, JSON.stringify(all));
+            trackChanges('allocazione', all.map(a => a.id));
+        }
 
         if (filters.personaId !== undefined) all = all.filter(a => a.personaId === filters.personaId);
         if (filters.codiceCommessa !== undefined) all = all.filter(a => a.codiceCommessa === filters.codiceCommessa);
@@ -277,7 +290,8 @@ export function saveAllocazione(data, origine = 'manuale') {
         const err = _validateAllocazione(updated) || _validateSaturation(updated, all);
         if (err) return { error: err };
         all[idx] = updated;
-        localStorage.setItem(ALLOCAZIONI_KEY, JSON.stringify(all));
+        safeSetItem(ALLOCAZIONI_KEY, JSON.stringify(all));
+        trackChange('allocazione', data.id);
         _audit('allocazione', data.id, 'update', old, updated, origine);
         return updated;
     }
@@ -301,7 +315,8 @@ export function saveAllocazione(data, origine = 'manuale') {
     if (err) return { error: err };
 
     all.push(nuova);
-    localStorage.setItem(ALLOCAZIONI_KEY, JSON.stringify(all));
+    safeSetItem(ALLOCAZIONI_KEY, JSON.stringify(all));
+    trackChange('allocazione', nuova.id);
     _audit('allocazione', nuova.id, 'create', null, nuova, origine);
     return nuova;
 }
@@ -311,7 +326,7 @@ export function deleteAllocazione(id) {
     const alloc = getAllocazione(id);
     if (alloc && _isScenarioLocked(alloc.scenarioId)) return { error: 'Lo scenario è bloccato. Sblocca o duplica per modificare.' };
     const all = listAllocazioni().filter(a => a.id !== id);
-    localStorage.setItem(ALLOCAZIONI_KEY, JSON.stringify(all));
+    safeSetItem(ALLOCAZIONI_KEY, JSON.stringify(all));
     trackDeletion('allocazione', id);
     _audit('allocazione', id, 'delete', null, null, 'manuale');
 }
@@ -335,7 +350,8 @@ export function copyAllocazioniScenario(fromScenarioId, toScenarioId) {
         updatedAt: now,
     }));
     const all = listAllocazioni();
-    localStorage.setItem(ALLOCAZIONI_KEY, JSON.stringify([...all, ...copies]));
+    safeSetItem(ALLOCAZIONI_KEY, JSON.stringify([...all, ...copies]));
+    trackChanges('allocazione', copies.map(c => c.id));
     _audit('allocazione', toScenarioId, 'copy_from_scenario', fromScenarioId, copies.length, 'manuale');
     return copies.length;
 }
@@ -346,7 +362,7 @@ export function deleteAllocazioniScenario(scenarioId) {
     const allAlloc = listAllocazioni();
     allAlloc.filter(a => a.scenarioId === scenarioId).forEach(a => trackDeletion('allocazione', a.id));
     const remaining = allAlloc.filter(a => a.scenarioId !== scenarioId);
-    localStorage.setItem(ALLOCAZIONI_KEY, JSON.stringify(remaining));
+    safeSetItem(ALLOCAZIONI_KEY, JSON.stringify(remaining));
 }
 
 /**
@@ -357,13 +373,18 @@ export function renameCommessaCodice(oldCodice, newCodice) {
     if (!oldCodice || !newCodice || oldCodice === newCodice) return 0;
     const all = listAllocazioni();
     let count = 0;
+    const toccate = [];
     for (const a of all) {
         if (a.codiceCommessa === oldCodice) {
             a.codiceCommessa = newCodice;
+            toccate.push(a.id);
             count++;
         }
     }
-    if (count > 0) localStorage.setItem(ALLOCAZIONI_KEY, JSON.stringify(all));
+    if (count > 0) {
+        safeSetItem(ALLOCAZIONI_KEY, JSON.stringify(all));
+        trackChanges('allocazione', toccate);
+    }
     return count;
 }
 
@@ -426,7 +447,7 @@ function _audit(entita, entitaId, operazione, old, nuova, origine) {
         const a = JSON.parse(localStorage.getItem(AUDIT_KEY) || '[]');
         a.push({ id: genId(), entita, entitaId, operazione, vecchioValore: old, nuovoValore: nuova, origine, timestamp: new Date().toISOString() });
         if (a.length > 1000) a.splice(0, a.length - 1000);
-        localStorage.setItem(AUDIT_KEY, JSON.stringify(a));
+        safeSetItem(AUDIT_KEY, JSON.stringify(a));
     } catch { /* non-critical */ }
 }
 
@@ -478,9 +499,15 @@ export function addMonths(ym, n) {
     return `${ny}-${String(nm).padStart(2, '0')}`;
 }
 
+// Istanza unica: costruire un Intl.NumberFormat a ogni chiamata costa circa
+// 80 volte piu' della formattazione stessa, e qui si formatta a migliaia.
+const _fmtEuro = new Intl.NumberFormat('it-IT', {
+    style: 'currency', currency: 'EUR', maximumFractionDigits: 0, useGrouping: true,
+});
+
 export function formatEuro(n) {
     if (n === null || n === undefined || isNaN(n)) return '—';
-    return new Intl.NumberFormat('it-IT', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0, useGrouping: true }).format(n);
+    return _fmtEuro.format(n);
 }
 
 // ─── IMPORT HELPERS ───────────────────────────────────────────

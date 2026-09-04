@@ -12,6 +12,7 @@
  */
 
 import { supabase } from './supabaseClient.js';
+import { safeSetItem } from './storage.js';
 
 const STORAGE_KEY = 'whatif_scenarios_order';
 const APP_CONFIG_KEY = 'scenarios_order';
@@ -29,7 +30,7 @@ export function loadOrder() {
 /** Salva ordine in localStorage + emette evento. */
 export function saveOrder(orderArray) {
     try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(orderArray));
+        safeSetItem(STORAGE_KEY, JSON.stringify(orderArray));
     } catch (e) {
         console.warn('[scenarioOrderManager] save failed:', e);
         return;

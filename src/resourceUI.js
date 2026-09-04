@@ -1064,9 +1064,18 @@ function _renderCommessaDetail(scenarioId, commesse, selectedCommesse = [], date
         });
     }
 
+    // Lettura unica delle allocazioni dello scenario, indicizzate per commessa:
+    // serve sia al filtro qui sotto sia al ciclo di rendering piu' avanti.
+    const allocPerCommessa = new Map();
+    for (const a of listAllocazioni({ scenarioId })) {
+        let elenco = allocPerCommessa.get(a.codiceCommessa);
+        if (!elenco) { elenco = []; allocPerCommessa.set(a.codiceCommessa, elenco); }
+        elenco.push(a);
+    }
+
     if (_resFilterAlloc !== 'all') {
         commesseDaRender = commesseDaRender.filter(c => {
-            const haAlloc = listAllocazioni({ codiceCommessa: c.codice, scenarioId }).length > 0;
+            const haAlloc = (allocPerCommessa.get(c.codice) || []).length > 0;
             return _resFilterAlloc === 'con' ? haAlloc : !haAlloc;
         });
     }
@@ -1098,8 +1107,11 @@ function _renderCommessaDetail(scenarioId, commesse, selectedCommesse = [], date
     const grandPersoneSet = new Set();
     const allRuoli = listRuoli();
 
+    // Indice delle persone: prima ogni riga faceva persone.find() su 94 elementi
+    const personaPerId = new Map(persone.map(p => [p.id, p]));
+
     const cards = commesseDaRender.map(commessa => {
-        const allocazioni = listAllocazioni({ codiceCommessa: commessa.codice, scenarioId });
+        const allocazioni = allocPerCommessa.get(commessa.codice) || [];
         const prob = (commessa.probabilita ?? 100) / 100;
         let costoTeorico = 0, costoProb = 0, fteTotal = 0;
         const personeCommessaSet = new Set();
@@ -1107,7 +1119,7 @@ function _renderCommessaDetail(scenarioId, commesse, selectedCommesse = [], date
         // Build row data for sorting
         const rowData = [];
         for (const a of allocazioni) {
-            const p = persone.find(x => x.id === a.personaId);
+            const p = personaPerId.get(a.personaId);
             if (!p) { rowData.push({ missing: true, personaId: a.personaId }); continue; }
             const { di: effDi, df: effDf } = _effDates(a);
             // Limita al periodo contrattuale della persona (come fa computeResourceMatrix)

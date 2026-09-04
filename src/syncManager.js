@@ -5,6 +5,10 @@
 // Uses hash-polling to detect local changes (non-invasive).
 
 import { supabase, getSession, getUserRole } from './supabaseClient.js';
+import {
+    safeSetItem, getDirty, clearDirty, clearDirtySynced, snapshotDirty,
+    countPendingChanges, DIRTY_TYPE_BY_SYNC_KEY
+} from './storage.js';
 
 // ─── Constants ───────────────────────────────────────────────
 
@@ -22,6 +26,7 @@ const PERIODIC_SYNC_MS = 15 * 1000; // 15 sec
 const MAX_RETRY = 3;
 const QUEUE_KEY = 'whatif_sync_queue';
 const LAST_SYNC_KEY = 'whatif_sync_last';
+const AUDIT_PUSHED_TS_KEY = 'whatif_audit_pushed_ts';
 const DELETED_SCENARIOS_KEY = 'whatif_deleted_scenarios';
 const DELETED_PERSONE_KEY = 'whatif_deleted_persone';
 const DELETED_ALLOCAZIONI_KEY = 'whatif_deleted_allocazioni';
@@ -51,6 +56,23 @@ let _userId = null;
 let _onlineUsers = []; // { email, role, joinedAt }
 let _presenceListeners = [];
 let _pushBlocked = false; // true if app version is too old
+// local_id inviati di recente da questo client: servono a ignorare l'eco realtime
+// delle proprie modifiche. Il filtro su user_id non basta, perche' ogni push
+// riscrive user_id e quindi le righe tornano indietro marcate come "di chi ha pushato".
+const _recentlyPushed = new Map();
+
+// Coda unica delle operazioni di sincronizzazione. Prima il polling lanciava
+// _pushEntity senza await e senza alzare _syncing, quindi un invio poteva
+// accavallarsi al fullPull del realtime: il pull riscriveva localStorage mentre
+// il push stava ancora leggendo, e le due cose si pestavano i piedi.
+let _catenaSync = Promise.resolve();
+
+/** Accoda un'operazione: parte solo quando la precedente è finita. */
+function _serializza(operazione) {
+    const risultato = _catenaSync.then(operazione, operazione);
+    _catenaSync = risultato.then(() => {}, () => {});
+    return risultato;
+}
 let _appVersion = null;
 let _status = { state: 'disconnected', lastSync: null, pending: 0, error: null };
 let _listeners = [];
@@ -67,7 +89,12 @@ export function onSyncStatusChange(callback) {
 }
 
 function _notifyListeners() {
-    _listeners.forEach(l => l({ ..._status }));
+    // Un listener della UI che lancia non deve far fallire il sync che lo ha
+    // notificato: _setStatus e' invocata anche a meta' transazione.
+    for (const l of _listeners) {
+        try { l({ ..._status }); }
+        catch (err) { console.warn('[SyncManager] listener di stato fallito:', err); }
+    }
 }
 
 function _setStatus(updates) {
@@ -112,6 +139,21 @@ export async function initSync() {
             result = 'empty';
         }
 
+        // La deduplica cloud girava dopo OGNI push (una query sull'intera tabella
+        // per ogni salvataggio). Ora gira una sola volta per sessione, in secondo
+        // piano: la pulizia resta, il costo per salvataggio sparisce.
+        if (_userRole !== 'viewer' && !_pushBlocked) {
+            Promise.resolve().then(async () => {
+                try {
+                    if (canWrite('whatif_persone'))     await _dedupPersoneCloud();
+                    if (canWrite('whatif_allocazioni')) await _dedupAllocazioniCloud();
+                    if (canWrite('whatif_ruoli'))       await _dedupRuoliCloud();
+                } catch (err) {
+                    console.warn('[SyncManager] Deduplica cloud di avvio fallita:', err.message);
+                }
+            });
+        }
+
         _userId = userId;
         _snapshotHashes();
         _startPolling(userId);
@@ -124,14 +166,21 @@ export async function initSync() {
 
         const serverNow = await _getServerTime();
         _setStatus({ state: 'connected', lastSync: serverNow });
-        localStorage.setItem(LAST_SYNC_KEY, serverNow);
+        safeSetItem(LAST_SYNC_KEY, serverNow);
 
         return result;
     } catch (err) {
         console.error('[SyncManager] initSync error:', err);
         _setStatus({ state: 'error', error: err.message });
-        return null;
+        // Restituisce un esito esplicito invece di null: chi chiama deve poter
+        // distinguere "nessun dato da caricare" da "sincronizzazione fallita".
+        return { errore: err.message };
     }
+}
+
+/** true se l'ultima initSync non e' andata a buon fine. */
+export function sincronizzazioneInErrore() {
+    return _status.state === 'error';
 }
 
 /**
@@ -232,7 +281,7 @@ export function trackDeletion(type, localId, extra = null) {
         const normalized = list.map(item => typeof item === 'string' ? { id: item, nome: null } : item);
         if (!normalized.some(e => e.id === localId)) {
             normalized.push({ id: localId, nome: extra || null });
-            localStorage.setItem(key, JSON.stringify(normalized));
+            safeSetItem(key, JSON.stringify(normalized));
         }
         return;
     }
@@ -240,7 +289,7 @@ export function trackDeletion(type, localId, extra = null) {
     const list = JSON.parse(localStorage.getItem(key) || '[]');
     if (!list.includes(localId)) {
         list.push(localId);
-        localStorage.setItem(key, JSON.stringify(list));
+        safeSetItem(key, JSON.stringify(list));
     }
 }
 
@@ -287,12 +336,13 @@ export async function fullPush(userId) {
 
     _setStatus({ state: 'syncing' });
 
+    const tutto = { full: true };
     if (canWrite('whatif_baseline'))    await _pushBaseline(userId);
-    if (canWrite('whatif_scenarios'))   await _pushScenarios(userId);
-    if (canWrite('whatif_persone'))     await _pushPersone(userId);
-    if (canWrite('whatif_allocazioni')) await _pushAllocazioni(userId);
-    if (canWrite('whatif_audit'))       await _pushAudit(userId);
-    if (canWrite('whatif_ruoli'))       await _pushRuoli(userId);
+    if (canWrite('whatif_scenarios'))   await _pushScenarios(userId, tutto);
+    if (canWrite('whatif_persone'))     await _pushPersone(userId, tutto);
+    if (canWrite('whatif_allocazioni')) await _pushAllocazioni(userId, tutto);
+    if (canWrite('whatif_audit'))       await _pushAudit(userId, tutto);
+    if (canWrite('whatif_ruoli'))       await _pushRuoli(userId, tutto);
     await _pushPreferences(userId);
 }
 
@@ -332,6 +382,10 @@ export async function incrementalSync(userId) {
     }
 
     if (_syncing) return;
+    return _serializza(() => _incrementalSyncInterno(userId));
+}
+
+async function _incrementalSyncInterno(userId) {
     _syncing = true;
 
     try {
@@ -378,7 +432,7 @@ export async function incrementalSync(userId) {
         }
 
         const serverNow = await _getServerTime();
-        localStorage.setItem(LAST_SYNC_KEY, serverNow);
+        safeSetItem(LAST_SYNC_KEY, serverNow);
         _setStatus({ state: 'connected', lastSync: serverNow, error: null, dataChanged, changedKeys });
     } catch (err) {
         console.error('[SyncManager] incrementalSync error:', err);
@@ -417,17 +471,29 @@ async function _pushBaseline(userId) {
     }
 }
 
-async function _pushScenarios(userId) {
+async function _pushScenarios(userId, opts = {}) {
     const raw = localStorage.getItem('whatif_scenarios');
     if (!raw) return;
 
     let scenarios = JSON.parse(raw);
-    if (!Array.isArray(scenarios) || scenarios.length === 0) return;
+    if (!Array.isArray(scenarios)) return;
 
     // Tester can only push their own scenarios (RLS blocks updating others' rows)
     if (_userRole === 'tester') {
+        const altrui = scenarios.filter(s => s.createdBy !== _userEmail).map(s => s.id);
         scenarios = scenarios.filter(s => s.createdBy === _userEmail);
-        if (scenarios.length === 0) return;
+        // Gli scenari altrui non saranno mai inviabili da questo utente: se restassero
+        // marcati come "da inviare", il polling ritenterebbe a vuoto ogni 2 secondi.
+        if (altrui.length) clearDirty('scenario', altrui);
+    }
+
+    // Invia SOLO gli scenari modificati qui. Prima si rispedivano tutti (~2,5 MB)
+    // a ogni singola modifica di un input.
+    // Fotografia con le versioni: una riga modificata mentre l'invio è in volo
+    // non deve essere tolta dalla coda, altrimenti quella modifica non parte più.
+    const istantaneaScen = snapshotDirty('scenario');
+    if (!opts.full) {
+        scenarios = scenarios.filter(s => istantaneaScen[s.id] !== undefined);
     }
 
     const rows = scenarios.map(s => ({
@@ -440,22 +506,33 @@ async function _pushScenarios(userId) {
         created_by_email: s.createdBy || _userEmail || ''
     }));
 
-    const { error } = await supabase
-        .from('scenarios')
-        .upsert(rows, { onConflict: 'local_id' });
+    if (rows.length) {
+        const { error } = await supabase
+            .from('scenarios')
+            .upsert(rows, { onConflict: 'local_id' });
 
-    if (error) throw new Error(`Push scenarios failed: ${error.message}`);
+        if (error) throw new Error(`Push scenarios failed: ${error.message}`);
 
-    // Soft-delete only explicitly deleted scenarios
+        _markPushed(rows.map(r => r.local_id));
+        const riMarcati = clearDirtySynced('scenario', istantaneaScen);
+        if (riMarcati) console.info(`[SyncManager] ${riMarcati} scenari modificati durante l'invio: restano in coda`);
+    }
+
+    // Le cancellazioni vanno propagate anche quando non c'e' nulla da inviare:
+    // prima il return anticipato su array vuoto le bloccava per sempre.
     await _pushExplicitDeletions('scenarios', DELETED_SCENARIOS_KEY);
 }
 
-async function _pushPersone(userId) {
+async function _pushPersone(userId, opts = {}) {
     const raw = localStorage.getItem('whatif_persone');
     if (!raw) return;
 
-    const persone = JSON.parse(raw);
-    if (!Array.isArray(persone) || persone.length === 0) return;
+    const tuttePersone = JSON.parse(raw);
+    if (!Array.isArray(tuttePersone)) return;
+
+    const istantaneaPers = snapshotDirty('persona');
+    const persone = opts.full ? tuttePersone
+        : tuttePersone.filter(p => istantaneaPers[p.id] !== undefined);
 
     const pushTime = new Date().toISOString();
     const rows = persone.map(p => ({
@@ -489,12 +566,18 @@ async function _pushPersone(userId) {
             .upsert(batch, { onConflict: 'local_id' });
         if (error) throw new Error(`Push persone failed: ${error.message}`);
     }
+    if (rows.length) {
+        _markPushed(rows.map(r => r.local_id));
+        const riMarcate = clearDirtySynced('persona', istantaneaPers);
+        if (riMarcate) console.info(`[SyncManager] ${riMarcate} persone modificate durante l'invio: restano in coda`);
+    }
 
     // Soft-delete only explicitly deleted persone
     await _pushExplicitDeletions('persone', DELETED_PERSONE_KEY);
 
-    // Cloud-side dedup persone by codice_fiscale or cognome+nome
-    await _dedupPersoneCloud();
+    // La deduplica cloud non gira piu' a ogni push: era una query sull'intera
+    // tabella per ogni salvataggio. Resta solo sul push completo.
+    if (opts.full) await _dedupPersoneCloud();
 }
 
 async function _dedupPersoneCloud() {
@@ -537,12 +620,19 @@ async function _dedupPersoneCloud() {
     }
 }
 
-async function _pushAllocazioni(userId) {
+async function _pushAllocazioni(userId, opts = {}) {
     const raw = localStorage.getItem('whatif_allocazioni');
     if (!raw) return;
 
-    const allocazioni = JSON.parse(raw);
-    if (!Array.isArray(allocazioni) || allocazioni.length === 0) return;
+    const tutteAlloc = JSON.parse(raw);
+    if (!Array.isArray(tutteAlloc)) return;
+
+    // Il punto centrale della correzione: si inviano solo le allocazioni toccate
+    // qui. Prima ognuna delle 2.844 righe ripartiva a ogni salvataggio con un
+    // updated_at nuovo, generando altrettanti eventi realtime verso ogni collega.
+    const istantaneaAlloc = snapshotDirty('allocazione');
+    const allocazioni = opts.full ? tutteAlloc
+        : tutteAlloc.filter(a => istantaneaAlloc[a.id] !== undefined);
 
     const pushTime = new Date().toISOString();
     const rows = allocazioni.map(a => ({
@@ -573,13 +663,20 @@ async function _pushAllocazioni(userId) {
             .upsert(batch, { onConflict: 'local_id' });
         if (error) throw new Error(`Push allocazioni failed: ${error.message}`);
     }
+    if (rows.length) {
+        _markPushed(rows.map(r => r.local_id));
+        // Punto centrale: le allocazioni ritoccate mentre il lotto era in volo
+        // mantengono una versione più alta e restano in coda per il giro dopo.
+        const riMarcate = clearDirtySynced('allocazione', istantaneaAlloc);
+        if (riMarcate) console.info(`[SyncManager] ${riMarcate} allocazioni modificate durante l'invio: restano in coda`);
+    }
 
     // Soft-delete only explicitly deleted allocazioni
     await _pushExplicitDeletions('allocazioni', DELETED_ALLOCAZIONI_KEY);
 
-    // Cloud-side dedup: remove duplicate allocazioni by content
-    // Keeps the most recent row per group (persona+commessa+scenario+%+dates)
-    await _dedupAllocazioniCloud();
+    // Deduplica tolta dal percorso di ogni salvataggio (era una RPC sull'intera
+    // tabella ogni volta). Resta sul push completo.
+    if (opts.full) await _dedupAllocazioniCloud();
 }
 
 /**
@@ -651,12 +748,16 @@ async function _dedupAllocazioniCloudFallback() {
     }
 }
 
-async function _pushRuoli(userId) {
+async function _pushRuoli(userId, opts = {}) {
     const raw = localStorage.getItem('whatif_ruoli');
     if (!raw) return;
 
-    const ruoli = JSON.parse(raw);
-    if (!Array.isArray(ruoli) || ruoli.length === 0) return;
+    const tuttiRuoli = JSON.parse(raw);
+    if (!Array.isArray(tuttiRuoli)) return;
+
+    const istantaneaRuoli = snapshotDirty('ruolo');
+    const ruoli = opts.full ? tuttiRuoli
+        : tuttiRuoli.filter(r => istantaneaRuoli[r.id] !== undefined);
 
     const pushTime = new Date().toISOString();
     const rows = ruoli.map(r => ({
@@ -670,17 +771,22 @@ async function _pushRuoli(userId) {
         deleted: false
     }));
 
-    const { error } = await supabase
-        .from('ruoli')
-        .upsert(rows, { onConflict: 'local_id' });
+    if (rows.length) {
+        const { error } = await supabase
+            .from('ruoli')
+            .upsert(rows, { onConflict: 'local_id' });
 
-    if (error) throw new Error(`Push ruoli failed: ${error.message}`);
+        if (error) throw new Error(`Push ruoli failed: ${error.message}`);
+
+        _markPushed(rows.map(r => r.local_id));
+        const riMarcati = clearDirtySynced('ruolo', istantaneaRuoli);
+        if (riMarcati) console.info(`[SyncManager] ${riMarcati} ruoli modificati durante l'invio: restano in coda`);
+    }
 
     // Soft-delete only explicitly deleted ruoli (by id AND by name to handle cloud duplicates)
     await _pushRuoliDeletions();
 
-    // Cloud-side dedup ruoli by nome
-    await _dedupRuoliCloud();
+    if (opts.full) await _dedupRuoliCloud();
 }
 
 async function _dedupRuoliCloud() {
@@ -748,27 +854,54 @@ async function _pushRuoliDeletions() {
         }
     }
 
-    // 2. Delete by nome (case-insensitive) — covers cloud duplicates with different local_id
-    for (const nome of names) {
-        const { error } = await supabase
+    // 2. Cancellazione per nome — copre i duplicati cloud con local_id diverso.
+    //    Il confronto si fa qui e non con .ilike(): in LIKE i caratteri % e _ sono
+    //    jolly, quindi un ruolo "PM_SENIOR" avrebbe marcato cancellati anche gli
+    //    omonimi per pattern, e un nome contenente % li avrebbe cancellati TUTTI.
+    //    Una sola lettura e un solo aggiornamento, con confronto esatto.
+    if (names.length > 0) {
+        const attesi = new Set(names.map(nome => String(nome).trim().toLowerCase()));
+        const { data: attivi, error: selErr } = await supabase
             .from('ruoli')
-            .update({ deleted: true, updated_at: nowIso })
-            .ilike('nome', nome);
-        if (error) {
-            console.warn(`[SyncManager] Push ruoli deletion by name "${nome}" failed:`, error.message);
+            .select('local_id, nome')
+            .eq('deleted', false);
+        if (selErr) {
+            console.warn('[SyncManager] Lettura ruoli per cancellazione fallita:', selErr.message);
             return;
+        }
+        const giaFatti = new Set(ids);
+        const daCancellare = (attivi || [])
+            .filter(r => attesi.has(String(r.nome || '').trim().toLowerCase()))
+            .map(r => r.local_id)
+            .filter(id => id && !giaFatti.has(id));
+        if (daCancellare.length > 0) {
+            const { error } = await supabase
+                .from('ruoli')
+                .update({ deleted: true, updated_at: nowIso })
+                .in('local_id', daCancellare);
+            if (error) {
+                console.warn('[SyncManager] Push ruoli deletions by name failed:', error.message);
+                return;
+            }
         }
     }
 
     localStorage.removeItem(DELETED_RUOLI_KEY);
 }
 
-async function _pushAudit(userId) {
+async function _pushAudit(userId, opts = {}) {
     const raw = localStorage.getItem('whatif_audit');
     if (!raw) return;
 
-    const audit = JSON.parse(raw);
-    if (!Array.isArray(audit) || audit.length === 0) return;
+    const tuttoAudit = JSON.parse(raw);
+    if (!Array.isArray(tuttoAudit) || tuttoAudit.length === 0) return;
+
+    // L'audit e' append-only: si inviano solo le voci nuove invece di
+    // rispedire tutte le 1.000 righe (circa 850 KB) a ogni salvataggio.
+    const ultimoTs = localStorage.getItem(AUDIT_PUSHED_TS_KEY) || '';
+    const audit = opts.full ? tuttoAudit
+        : tuttoAudit.filter(a => (a.timestamp || '') > ultimoTs);
+    if (audit.length === 0) return;
 
     const rows = audit.map(a => ({
         user_id: userId,
@@ -789,6 +922,11 @@ async function _pushAudit(userId) {
             .upsert(batch, { onConflict: 'local_id', ignoreDuplicates: true });
         if (error) console.warn('[SyncManager] Push audit partial error:', error.message);
     }
+
+    // Ricorda fin dove siamo arrivati, per inviare solo il nuovo la prossima volta.
+    let maxTs = ultimoTs;
+    for (const a of audit) if ((a.timestamp || '') > maxTs) maxTs = a.timestamp || '';
+    if (maxTs) safeSetItem(AUDIT_PUSHED_TS_KEY, maxTs);
 }
 
 async function _pushPreferences(userId) {
@@ -824,7 +962,7 @@ async function _pullBaseline() {
 
     if (error) throw new Error(`Pull baseline failed: ${error.message}`);
     if (data?.data) {
-        localStorage.setItem('whatif_baseline', JSON.stringify(data.data));
+        safeSetItem('whatif_baseline', JSON.stringify(data.data));
     }
 }
 
@@ -836,8 +974,13 @@ async function _pullScenarios() {
 
     if (error) throw new Error(`Pull scenarios failed: ${error.message}`);
     if (data && data.length > 0) {
-        const scenarios = data.map(row => row.data);
-        localStorage.setItem('whatif_scenarios', JSON.stringify(scenarios));
+        // Una riga con data nullo faceva fallire ogni pull successivo sempre sulla
+        // stessa riga, senza mai avanzare LAST_SYNC: ciclo infinito con "Sync OK".
+        const scarti = data.filter(row => !row.data || !row.data.id).length;
+        if (scarti) console.warn(`[SyncManager] ${scarti} scenari cloud senza dati validi: ignorati`);
+        const scenarios = data.map(row => row.data).filter(s => s && s.id);
+        safeSetItem('whatif_scenarios', JSON.stringify(
+            _mergeRows('whatif_scenarios', 'scenario', scenarios)));
     }
 }
 
@@ -870,7 +1013,8 @@ async function _pullPersone() {
             createdAt: row.created_at,
             updatedAt: row.updated_at
         }));
-        localStorage.setItem('whatif_persone', JSON.stringify(persone));
+        safeSetItem('whatif_persone', JSON.stringify(
+            _mergeRows('whatif_persone', 'persona', persone)));
     }
 }
 
@@ -914,7 +1058,8 @@ async function _pullAllocazioni() {
             createdAt: row.created_at,
             updatedAt: row.updated_at
         }));
-        localStorage.setItem('whatif_allocazioni', JSON.stringify(allocazioni));
+        safeSetItem('whatif_allocazioni', JSON.stringify(
+            _mergeRows('whatif_allocazioni', 'allocazione', allocazioni)));
     }
 }
 
@@ -937,7 +1082,7 @@ async function _pullAudit() {
             origine: row.origine,
             timestamp: row.timestamp
         }));
-        localStorage.setItem('whatif_audit', JSON.stringify(audit));
+        safeSetItem('whatif_audit', JSON.stringify(audit));
     }
 }
 
@@ -958,7 +1103,8 @@ async function _pullRuoli() {
             createdAt: row.updated_at,
             updatedAt: row.updated_at
         }));
-        localStorage.setItem('whatif_ruoli', JSON.stringify(ruoli));
+        safeSetItem('whatif_ruoli', JSON.stringify(
+            _mergeRows('whatif_ruoli', 'ruolo', ruoli)));
     }
 }
 
@@ -973,7 +1119,7 @@ async function _pullPreferences(userId) {
     if (data) {
         data.forEach(row => {
             if (row.value != null) {
-                localStorage.setItem(row.key, row.value);
+                safeSetItem(row.key, row.value);
             }
         });
     }
@@ -998,7 +1144,7 @@ async function _pullIfNewer(since) {
         .maybeSingle();
 
     if (bl?.data) {
-        localStorage.setItem('whatif_baseline', JSON.stringify(bl.data));
+        safeSetItem('whatif_baseline', JSON.stringify(bl.data));
     }
 
     // Scenarios
@@ -1027,7 +1173,7 @@ async function _pullIfNewer(since) {
                 }
             }
         }
-        localStorage.setItem('whatif_scenarios', JSON.stringify(localScenarios));
+        safeSetItem('whatif_scenarios', JSON.stringify(localScenarios));
     }
 
     // Persone
@@ -1100,7 +1246,7 @@ async function _pullIfNewer(since) {
                                 }
                                 if (remapped > 0) {
                                     console.info(`[SyncManager] Remapped ${remapped} allocazioni from ${oldLocalId} → ${mapped.id}`);
-                                    localStorage.setItem('whatif_allocazioni', JSON.stringify(allocs));
+                                    safeSetItem('whatif_allocazioni', JSON.stringify(allocs));
                                 }
                             }
                         } catch (e) { console.warn('[SyncManager] Remap allocazioni error:', e); }
@@ -1110,7 +1256,7 @@ async function _pullIfNewer(since) {
                 }
             }
         }
-        localStorage.setItem('whatif_persone', JSON.stringify(localPersone));
+        safeSetItem('whatif_persone', JSON.stringify(localPersone));
     }
 
     // Allocazioni (paginato: oltre 1000 righe il default Supabase tronca)
@@ -1183,7 +1329,7 @@ async function _pullIfNewer(since) {
                 }
             }
         }
-        localStorage.setItem('whatif_allocazioni', JSON.stringify(localAlloc));
+        safeSetItem('whatif_allocazioni', JSON.stringify(localAlloc));
     }
 
     // Ruoli
@@ -1230,7 +1376,7 @@ async function _pullIfNewer(since) {
                 }
             }
         }
-        localStorage.setItem('whatif_ruoli', JSON.stringify(localRuoli));
+        safeSetItem('whatif_ruoli', JSON.stringify(localRuoli));
     }
 }
 
@@ -1273,8 +1419,11 @@ function _deduplicateAllocazioni() {
 
     if (toRemove.size > 0) {
         console.warn(`[SyncManager] Dedup: removing ${toRemove.size} duplicate allocazioni`);
-        const cleaned = alloc.filter((_, i) => !toRemove.has(i));
-        localStorage.setItem('whatif_allocazioni', JSON.stringify(cleaned));
+        // Una riga modificata qui e non ancora inviata non va mai eliminata:
+        // sarebbe lavoro perso prima ancora di raggiungere il cloud.
+        const dirtyA = getDirty('allocazione');
+        const cleaned = alloc.filter((a, i) => !toRemove.has(i) || dirtyA.has(a.id));
+        safeSetItem('whatif_allocazioni', JSON.stringify(cleaned));
     }
 }
 
@@ -1319,8 +1468,9 @@ function _deduplicatePersone() {
 
     if (toRemove.size > 0) {
         console.warn(`[SyncManager] Dedup: removing ${toRemove.size} duplicate persone`);
-        const cleaned = persone.filter((_, i) => !toRemove.has(i));
-        localStorage.setItem('whatif_persone', JSON.stringify(cleaned));
+        const dirtyP = getDirty('persona');
+        const cleaned = persone.filter((p, i) => !toRemove.has(i) || dirtyP.has(p.id));
+        safeSetItem('whatif_persone', JSON.stringify(cleaned));
 
         // Remap allocazioni referencing removed persone IDs
         try {
@@ -1334,7 +1484,7 @@ function _deduplicatePersone() {
                 }
                 if (remapped > 0) {
                     console.info(`[SyncManager] Remapped ${remapped} allocazioni after persona dedup`);
-                    localStorage.setItem('whatif_allocazioni', JSON.stringify(allocs));
+                    safeSetItem('whatif_allocazioni', JSON.stringify(allocs));
                 }
             }
         } catch (e) { console.warn('[SyncManager] Remap after persona dedup error:', e); }
@@ -1378,8 +1528,9 @@ function _deduplicateRuoli() {
 
     if (toRemove.size > 0) {
         console.warn(`[SyncManager] Dedup: removing ${toRemove.size} duplicate ruoli`);
-        const cleaned = ruoli.filter((_, i) => !toRemove.has(i));
-        localStorage.setItem('whatif_ruoli', JSON.stringify(cleaned));
+        const dirtyR = getDirty('ruolo');
+        const cleaned = ruoli.filter((r, i) => !toRemove.has(i) || dirtyR.has(r.id));
+        safeSetItem('whatif_ruoli', JSON.stringify(cleaned));
     }
 }
 
@@ -1427,14 +1578,14 @@ async function _pushExplicitDeletions(table, deletedKey) {
 
 async function _pushEntity(localStorageKey, userId) {
     // Version gate: block push if app is too old
-    if (_pushBlocked) return;
+    if (_pushBlocked) return false;
 
     // Role-based gating: check per-entity permissions
-    if (!canWrite(localStorageKey)) return;
+    if (!canWrite(localStorageKey)) return false;
 
     if (!navigator.onLine) {
         _queueOffline({ op: 'push', key: localStorageKey, timestamp: new Date().toISOString() });
-        return;
+        return false;
     }
 
     try {
@@ -1461,11 +1612,13 @@ async function _pushEntity(localStorageKey, userId) {
         }
         const serverNow = await _getServerTime();
         _setStatus({ state: 'connected', lastSync: serverNow, error: null, conflict: null });
-        localStorage.setItem(LAST_SYNC_KEY, serverNow);
+        safeSetItem(LAST_SYNC_KEY, serverNow);
+        return true;
     } catch (err) {
         console.error(`[SyncManager] Push ${localStorageKey} failed:`, err);
         _queueOffline({ op: 'push', key: localStorageKey, timestamp: new Date().toISOString() });
         _setStatus({ state: 'error', error: err.message });
+        return false;
     }
 }
 
@@ -1478,7 +1631,7 @@ async function _detectConflict(localStorageKey) {
     if (!lastSync) return false;
 
     const tableMap = {
-        'whatif_baseline': 'baseline',
+        'whatif_baseline': 'baselines',
         'whatif_scenarios': 'scenarios',
         'whatif_persone': 'persone',
         'whatif_allocazioni': 'allocazioni',
@@ -1515,10 +1668,22 @@ function _startPolling(userId) {
         if (_syncing || !navigator.onLine) return;
 
         for (const key of SYNC_KEYS) {
-            const current = _hashString(localStorage.getItem(key) || '');
-            if (current !== _hashes[key]) {
-                _hashes[key] = current;
-                _pushEntity(key, userId);
+            const tipo = DIRTY_TYPE_BY_SYNC_KEY[key];
+            if (tipo) {
+                _potaDirty(key, tipo);
+                // Le entita' tracciate per riga sanno gia' se hanno qualcosa da inviare:
+                // non serve piu' rileggere e scorrere carattere per carattere ~7 MB
+                // di JSON ogni 2 secondi.
+                if (getDirty(tipo).size > 0) _serializza(() => _pushEntity(key, userId));
+            } else {
+                // baseline e audit non hanno tracciamento per riga: resta il confronto hash
+                const current = _hashString(localStorage.getItem(key) || '');
+                if (current !== _hashes[key]) {
+                    // L'hash si aggiorna SOLO a push riuscito: altrimenti una modifica
+                    // fatta durante un microcalo di rete diventava invisibile a tutti
+                    // i meccanismi e spariva senza lasciare traccia.
+                    _serializza(() => _pushEntity(key, userId)).then(ok => { if (ok) _hashes[key] = current; });
+                }
             }
         }
     }, POLL_INTERVAL_MS);
@@ -1528,6 +1693,12 @@ function _startPeriodicSync(userId) {
     if (_periodicTimer) clearInterval(_periodicTimer);
     _periodicTimer = setInterval(() => {
         if (!navigator.onLine) return;
+        // Una coda creata per un errore mentre si era online non veniva mai svuotata:
+        // _flushQueue era agganciata al solo evento 'online'. Ora si ritenta qui.
+        try {
+            const queue = JSON.parse(localStorage.getItem(QUEUE_KEY) || '[]');
+            if (Array.isArray(queue) && queue.length > 0) _flushQueue(userId);
+        } catch { /* coda illeggibile: la ignora */ }
         incrementalSync(userId).catch(err => {
             console.warn('[SyncManager] Periodic sync failed:', err);
         });
@@ -1536,7 +1707,10 @@ function _startPeriodicSync(userId) {
 
 // ─── Supabase Realtime ──────────────────────────────────────
 
-const REALTIME_TABLES = ['baseline', 'scenarios', 'persone', 'allocazioni', 'ruoli'];
+// 'baselines' al plurale: e' il nome reale della tabella (supabase-schema.sql:53) ed e'
+// nella pubblicazione realtime. Con 'baseline' la sottoscrizione non riceveva nulla,
+// quindi il caricamento AOP di un collega non arrivava mai in tempo reale.
+const REALTIME_TABLES = ['baselines', 'scenarios', 'persone', 'allocazioni', 'ruoli'];
 let _realtimeDebounce = null;
 let _realtimePending = false; // tracks if a sync should run after current one finishes
 
@@ -1556,6 +1730,9 @@ function _startRealtime(userId) {
                 (payload) => {
                     // Ignore changes made by this user (already in localStorage)
                     if (payload.new?.user_id === userId) return;
+                    // e ignora l'eco delle righe che abbiamo appena inviato noi:
+                    // il push riscrive user_id, quindi il controllo sopra non basta
+                    if (_isOwnEcho(payload.new?.local_id)) return;
 
                     console.info(`[Realtime] Change on ${table} by another user`);
 
@@ -1592,17 +1769,34 @@ async function _triggerRealtimeSync(userId) {
         _realtimePending = true;
         return;
     }
+    return _serializza(() => _triggerRealtimeSyncInterno(userId));
+}
 
+async function _triggerRealtimeSyncInterno(userId) {
     _syncing = true;
     try {
         // STEP 1: Push local data to cloud FIRST (protect unpushed changes)
+        let pushFallito = null;
         for (const key of SYNC_KEYS) {
             if (!canWrite(key)) continue;
             try {
                 await _pushEntityDirect(key, userId);
             } catch (e) {
-                console.warn(`[Realtime] Pre-pull push ${key} failed (non-blocking):`, e.message);
+                pushFallito = e.message;
+                console.warn(`[Realtime] Pre-pull push ${key} failed:`, e.message);
             }
+        }
+
+        // Se il push non e' riuscito e restano modifiche locali non inviate, il
+        // pull non le distrugge piu' (ci pensa _mergeRows), ma l'utente deve
+        // saperlo: prima l'errore finiva solo in console.
+        const inSospeso = countPendingChanges();
+        if (pushFallito && inSospeso > 0) {
+            _setStatus({
+                state: 'error',
+                pendingChanges: inSospeso,
+                error: `${inSospeso} modifiche non ancora inviate al cloud: ${pushFallito}`
+            });
         }
 
         // Snapshot before pull
@@ -1634,7 +1828,7 @@ async function _triggerRealtimeSync(userId) {
         }
 
         const serverNow = await _getServerTime();
-        localStorage.setItem(LAST_SYNC_KEY, serverNow);
+        safeSetItem(LAST_SYNC_KEY, serverNow);
         _setStatus({ state: 'connected', lastSync: serverNow, error: null, dataChanged, changedKeys });
     } catch (err) {
         console.warn('[Realtime] Sync failed:', err);
@@ -1704,7 +1898,7 @@ function _startPresence(userId) {
 function _queueOffline(operation) {
     const queue = JSON.parse(localStorage.getItem(QUEUE_KEY) || '[]');
     queue.push(operation);
-    localStorage.setItem(QUEUE_KEY, JSON.stringify(queue));
+    safeSetItem(QUEUE_KEY, JSON.stringify(queue));
     _setStatus({ pending: queue.length });
 }
 
@@ -1722,13 +1916,20 @@ async function _flushQueue(userId) {
         while (retries < MAX_RETRY && !success) {
             try {
                 if (op.op === 'push') {
-                    await _pushEntity(op.key, userId);
+                    // Percorso "stretto": qui l'errore DEVE emergere. Con _pushEntity,
+                    // che cattura tutto internamente, success risultava sempre true e
+                    // la riga appena riaccodata veniva cancellata subito dopo.
+                    if (_pushBlocked) throw new Error('Versione app non aggiornata: invio bloccato');
+                    if (!navigator.onLine) throw new Error('Nessuna connessione');
+                    if (canWrite(op.key)) await _pushEntityDirect(op.key, userId);
                 }
                 success = true;
-            } catch {
+            } catch (err) {
                 retries++;
                 if (retries < MAX_RETRY) {
                     await new Promise(r => setTimeout(r, 1000 * retries));
+                } else {
+                    console.warn(`[SyncManager] coda: ${op.key} fallita dopo ${MAX_RETRY} tentativi:`, err.message);
                 }
             }
         }
@@ -1736,11 +1937,21 @@ async function _flushQueue(userId) {
         if (!success) failed.push(op);
     }
 
-    localStorage.setItem(QUEUE_KEY, JSON.stringify(failed));
+    // Fonde con quanto e' stato accodato mentre svuotavamo: prima la riscrittura
+    // secca cancellava anche le operazioni arrivate nel frattempo.
+    let sopraggiunte = [];
+    try { sopraggiunte = JSON.parse(localStorage.getItem(QUEUE_KEY) || '[]'); } catch { /* coda illeggibile */ }
+    const unione = failed.slice();
+    for (const op of sopraggiunte) {
+        if (!unione.some(f => f.op === op.op && f.key === op.key)) unione.push(op);
+    }
+    safeSetItem(QUEUE_KEY, JSON.stringify(unione));
     _setStatus({
-        state: failed.length > 0 ? 'error' : 'connected',
-        pending: failed.length,
-        error: failed.length > 0 ? `${failed.length} operazioni fallite` : null,
+        state: unione.length > 0 ? 'error' : 'connected',
+        pending: unione.length,
+        error: unione.length > 0
+            ? `${unione.length} modifiche non ancora inviate al cloud`
+            : null,
         lastSync: new Date().toISOString()
     });
 }
@@ -1758,6 +1969,73 @@ async function _getServerTime() {
 
 // ─── Utilities ───────────────────────────────────────────────
 
+/**
+ * Toglie dal registro "da inviare" gli id che non esistono più in locale: senza
+ * questo una riga cancellata dopo essere stata modificata resterebbe sporca per
+ * sempre e il polling ritenterebbe a vuoto.
+ */
+function _potaDirty(storageKey, dirtyType) {
+    const dirty = getDirty(dirtyType);
+    if (dirty.size === 0) return;
+    let righe = [];
+    try { righe = JSON.parse(localStorage.getItem(storageKey) || '[]'); } catch { return; }
+    if (!Array.isArray(righe)) return;
+    const presenti = new Set(righe.map(r => r && r.id).filter(Boolean));
+    const fantasma = [...dirty].filter(id => !presenti.has(id));
+    if (fantasma.length) clearDirty(dirtyType, fantasma);
+}
+
+/**
+ * Fonde le righe del cloud nell'array locale conservando le modifiche fatte qui
+ * e non ancora inviate. Prima il pull faceva setItem dell'array del cloud,
+ * distruggendo qualunque lavoro locale non ancora sincronizzato.
+ */
+function _mergeRows(storageKey, dirtyType, cloudRows) {
+    const dirty = getDirty(dirtyType);
+    let locali = [];
+    try { locali = JSON.parse(localStorage.getItem(storageKey) || '[]'); } catch { locali = []; }
+    if (!Array.isArray(locali)) locali = [];
+
+    // Nessuna modifica locale in sospeso: il cloud e' la fonte di verita'.
+    if (dirty.size === 0) return cloudRows;
+
+    const localiById = new Map(locali.filter(r => r && r.id).map(r => [r.id, r]));
+    const merged = [];
+    const visti = new Set();
+
+    for (const c of cloudRows) {
+        if (!c || !c.id) continue; // riga cloud non valida: scartata, non propagata
+        visti.add(c.id);
+        // una riga modificata qui e non ancora inviata prevale sulla versione cloud
+        merged.push(dirty.has(c.id) && localiById.has(c.id) ? localiById.get(c.id) : c);
+    }
+    // righe create qui e non ancora inviate: non esistono nel cloud, vanno conservate
+    for (const l of locali) {
+        if (l && l.id && !visti.has(l.id) && dirty.has(l.id)) merged.push(l);
+    }
+    return merged;
+}
+
+/** Segna le righe appena inviate, per non reagire al proprio eco realtime. */
+function _markPushed(ids) {
+    const t = Date.now();
+    for (const id of ids) if (id) _recentlyPushed.set(id, t);
+    if (_recentlyPushed.size > 5000) {
+        for (const [id, ts] of _recentlyPushed) {
+            if (t - ts > 30000) _recentlyPushed.delete(id);
+        }
+    }
+}
+
+/** true se l'evento realtime riguarda una riga che abbiamo appena inviato noi. */
+function _isOwnEcho(localId) {
+    if (!localId) return false;
+    const t = _recentlyPushed.get(localId);
+    if (!t) return false;
+    if (Date.now() - t > 15000) { _recentlyPushed.delete(localId); return false; }
+    return true;
+}
+
 function _hashString(str) {
     let hash = 5381;
     for (let i = 0; i < str.length; i++) {
@@ -1767,18 +2045,25 @@ function _hashString(str) {
 }
 
 async function _cloudHasData() {
-    const { data } = await supabase
+    // L'errore va propagato, non ignorato: prima, con un timeout o un rifiuto RLS,
+    // questa funzione rispondeva "cloud vuoto" a cloud pieno e initSync eseguiva un
+    // fullPush, riscrivendo sul cloud dati locali potenzialmente vecchi. Era l'unico
+    // punto in cui un errore silenzioso poteva distruggere il lavoro degli altri.
+    const { data, error: errBaseline } = await supabase
         .from('baselines')
         .select('id')
         .limit(1)
         .maybeSingle();
 
+    if (errBaseline) throw new Error(`Verifica dati cloud fallita: ${errBaseline.message}`);
     if (data) return true;
 
-    const { count } = await supabase
+    const { count, error: errScenari } = await supabase
         .from('scenarios')
         .select('id', { count: 'exact', head: true })
         .eq('deleted', false);
+
+    if (errScenari) throw new Error(`Verifica dati cloud fallita: ${errScenari.message}`);
 
     return (count || 0) > 0;
 }
@@ -1884,7 +2169,7 @@ export async function pushAllocazioniNow() {
     await _pushAllocazioni(userId);
     _hashes['whatif_allocazioni'] = _hashString(localStorage.getItem('whatif_allocazioni') || '');
     const serverNow = await _getServerTime();
-    localStorage.setItem(LAST_SYNC_KEY, serverNow);
+    safeSetItem(LAST_SYNC_KEY, serverNow);
 }
 
 function _backupLocal() {
@@ -1894,6 +2179,6 @@ function _backupLocal() {
         if (val) backup[key] = val;
     }
     if (Object.keys(backup).length > 0) {
-        localStorage.setItem('whatif_pre_sync_backup', JSON.stringify(backup));
+        safeSetItem('whatif_pre_sync_backup', JSON.stringify(backup));
     }
 }

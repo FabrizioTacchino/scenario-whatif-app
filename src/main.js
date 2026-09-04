@@ -13,11 +13,13 @@ import {
 } from './scenarioManager.js';
 import { exportToExcel, exportToCSV, exportToTemplate, exportChartToExcel } from './exportManager.js';
 import { initResourceModule, renderResourceTab, onScenarioDuplicated } from './resourceUI.js';
-import { renameCommessaCodice, listPersone, listAllocazioni } from './resourceManager.js';
+import { renameCommessaCodice, listPersone, listAllocazioni, deleteAllocazioniScenario } from './resourceManager.js';
+import { safeSetItem, trackChanges, onStorageError, getStorageUsage } from './storage.js';
+import * as notify from './notify.js';
 import { computeResourceMatrix, computeResourceKpis } from './resourceEngine.js';
 import { generateReport } from './reportGenerator.js';
 import { supabase, signIn, signUp, signOut, getSession, onAuthStateChange, getUserRole, listUsers, updateUserRole } from './supabaseClient.js';
-import { initSync, stopSync, fullPush, fullPull, getSyncStatus, onSyncStatusChange, incrementalSync, trackDeletion, getCurrentRole, canWrite, fetchAllScenariosFromCloud, pushScenarioApproval, pushScenarioDelete, pushSingleScenario, pushScenarioRestore, onPresenceChange, getOnlineUsers } from './syncManager.js';
+import { initSync, stopSync, fullPush, fullPull, getSyncStatus, onSyncStatusChange, incrementalSync, trackDeletion, getCurrentRole, canWrite, fetchAllScenariosFromCloud, pushScenarioApproval, pushScenarioDelete, pushSingleScenario, pushScenarioRestore, onPresenceChange, getOnlineUsers, deleteAllocazioniScenarioCloud } from './syncManager.js';
 import { Chart, registerables } from 'chart.js';
 import ChartDataLabels from 'chartjs-plugin-datalabels';
 
@@ -44,6 +46,82 @@ _focusAnchor.style.cssText = 'position:fixed;top:-100px;left:-100px;opacity:0;wi
 _focusAnchor.tabIndex = -1;
 _focusAnchor.setAttribute('aria-hidden', 'true');
 document.body.appendChild(_focusAnchor);
+
+/**
+ * Elimina uno scenario insieme alle sue allocazioni.
+ * Prima le allocazioni restavano orfane: nei dati di produzione erano 1.669
+ * su 2.844 (il 59%), e continuavano a essere sincronizzate a ogni ciclo.
+ */
+async function eliminaScenarioConAllocazioni(scenarioId) {
+    try {
+        deleteAllocazioniScenario(scenarioId);
+        await deleteAllocazioniScenarioCloud(scenarioId);
+    } catch (err) {
+        console.warn('[Scenari] pulizia allocazioni collegate fallita:', err);
+    }
+    trackDeletion('scenario', scenarioId);
+    deleteScenario(scenarioId);
+}
+
+/**
+ * Avviso visibile quando una scrittura su localStorage fallisce (tipicamente
+ * spazio esaurito). Prima l'eccezione interrompeva il gestore del click senza
+ * dire nulla: la modale restava aperta e l'utente credeva di aver salvato.
+ */
+function _setupStorageAlert() {
+    let mostrato = false;
+    onStorageError(({ quotaExceeded, usage }) => {
+        if (mostrato) return; // un avviso per sessione, non uno per riga
+        mostrato = true;
+        const banner = document.createElement('div');
+        banner.id = 'storage-error-banner';
+        banner.style.cssText =
+            'position:fixed;top:0;left:0;right:0;z-index:99999;padding:14px 18px;' +
+            'background:#b91c1c;color:#fff;font-weight:600;text-align:center;' +
+            'box-shadow:0 2px 12px rgba(0,0,0,.35)';
+        banner.textContent = quotaExceeded
+            ? 'SPAZIO ESAURITO (' + usage.megabytes + ' MB): le ultime modifiche NON sono state salvate. '
+              + 'Esporta subito un backup e avvisa l\'amministratore.'
+            : 'Le ultime modifiche NON sono state salvate. Esporta subito un backup e avvisa l\'amministratore.';
+        const chiudi = document.createElement('button');
+        chiudi.textContent = '✕';
+        chiudi.style.cssText = 'margin-left:16px;background:transparent;border:0;color:#fff;font-size:16px;cursor:pointer';
+        chiudi.onclick = () => { banner.remove(); mostrato = false; };
+        banner.appendChild(chiudi);
+        document.body.appendChild(banner);
+    });
+}
+
+/**
+ * Porta a schermo l'esito reale della sincronizzazione. Prima l'indicatore veniva
+ * messo su "connesso" subito dopo initSync anche quando questa era fallita:
+ * l'utente continuava a lavorare convinto di essere allineato al cloud.
+ */
+function _applicaEsitoSync(result) {
+    if (result && result.errore) {
+        updateCloudIndicator('error');
+        notify.errore('Sincronizzazione non riuscita: le modifiche restano solo su questo PC.',
+                      { dettaglio: result.errore });
+    } else {
+        updateCloudIndicator('connected');
+    }
+}
+
+/**
+ * Date effettive di commessa gia' calcolate, per chiave "codice|scenario".
+ * Va svuotata ogni volta che cambiano gli scenari o la baseline: lo fa
+ * _invalidaCacheDate(), richiamata dai punti di modifica e dal sync.
+ */
+const _cacheDateCommessa = new Map();
+let _listenerScenarioRegistrato = false;
+
+function _invalidaCacheDate() {
+    _cacheDateCommessa.clear();
+}
+
+// Qualunque scrittura sugli scenari rende obsolete le date calcolate.
+try { window.addEventListener('whatif:scenariCambiati', _invalidaCacheDate); }
+catch { /* fuori dal browser */ }
 
 function _restoreFocus() {
     const fix = () => {
@@ -87,13 +165,24 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
             if (_removeP.size > 0) {
                 console.warn(`[Startup] Rimossi ${_removeP.size} persone duplicate`);
-                localStorage.setItem('whatif_persone', JSON.stringify(_persone.filter((_, i) => !_removeP.has(i))));
-                // Remap allocazioni
+                const _personePulite = _persone.filter((_, i) => !_removeP.has(i));
+                safeSetItem('whatif_persone', JSON.stringify(_personePulite));
+                // Le duplicate tolte qui sono cancellazioni: vanno propagate al cloud,
+                // altrimenti il pull successivo le riporta indietro.
+                _persone.forEach((p, i) => { if (_removeP.has(i) && p.id) trackDeletion('persona', p.id); });
+                // Remap allocazioni: solo quelle il cui personaId cambia davvero
                 const _rawA = localStorage.getItem('whatif_allocazioni');
                 if (_rawA) {
                     const _allocs = JSON.parse(_rawA);
-                    for (const a of _allocs) { const nid = _idRemap.get(a.personaId); if (nid) a.personaId = nid; }
-                    localStorage.setItem('whatif_allocazioni', JSON.stringify(_allocs));
+                    const _rimappate = [];
+                    for (const a of _allocs) {
+                        const nid = _idRemap.get(a.personaId);
+                        if (nid && nid !== a.personaId) { a.personaId = nid; _rimappate.push(a.id); }
+                    }
+                    if (_rimappate.length) {
+                        safeSetItem('whatif_allocazioni', JSON.stringify(_allocs));
+                        trackChanges('allocazione', _rimappate);
+                    }
                 }
             }
         }
@@ -112,7 +201,10 @@ document.addEventListener('DOMContentLoaded', async () => {
             const _cleaned = [..._seen.values()];
             if (_cleaned.length < _alloc.length) {
                 console.warn(`[Startup] Rimossi ${_alloc.length - _cleaned.length} allocazioni duplicate`);
-                localStorage.setItem('whatif_allocazioni', JSON.stringify(_cleaned));
+                const _superstiti = new Set(_cleaned.map(a => a.id));
+                safeSetItem('whatif_allocazioni', JSON.stringify(_cleaned));
+                // Propaga le eliminazioni invece di rimarcare tutto come da inviare
+                for (const a of _alloc) if (a.id && !_superstiti.has(a.id)) trackDeletion('allocazione', a.id);
             }
         }
         // Dedup ruoli (by nome)
@@ -135,28 +227,37 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
             if (_removeR.size > 0) {
                 console.warn(`[Startup] Rimossi ${_removeR.size} ruoli duplicati`);
-                localStorage.setItem('whatif_ruoli', JSON.stringify(_ruoli.filter((_, i) => !_removeR.has(i))));
+                const _ruoliPuliti = _ruoli.filter((_, i) => !_removeR.has(i));
+                safeSetItem('whatif_ruoli', JSON.stringify(_ruoliPuliti));
+                _ruoli.forEach((r, i) => { if (_removeR.has(i) && r.id) trackDeletion('ruolo', r.id, r.nome); });
             }
         }
     } catch (e) { console.warn('[Startup] Dedup error:', e); }
 
-    initTheme();
-    setupFileUpload();
-    setupUpdateImport();
-    setupTabs();
-    setupScenarioButtons();
-    setupFilterEvents();
-    setupExportEvents();
-    setupGlobalSliders();
-    setupModals();
-    setupThemeToggle();
-    setupZoomControls();
-    setupChangeFileButton();
-    setupLicenseScreen();
-    setupUpdateBanner();
-    setupChartDownloads();
-    setupScenarioCompareTab();
-    setupCloudAuth();
+    notify.installaCatturaGlobale();
+    _setupStorageAlert();
+
+    // Ogni inizializzazione e' isolata: se una fallisce le altre partono comunque
+    // e la schermata licenza non resta bloccata a video (prima era l'ultima
+    // istruzione di una sequenza senza alcun try/catch).
+    const _avvii = [
+        ['tema', initTheme], ['caricamento file', setupFileUpload],
+        ['import aggiornamento', setupUpdateImport], ['schede', setupTabs],
+        ['pulsanti scenario', setupScenarioButtons], ['filtri', setupFilterEvents],
+        ['export', setupExportEvents], ['cursori globali', setupGlobalSliders],
+        ['finestre', setupModals], ['tema chiaro/scuro', setupThemeToggle],
+        ['zoom', setupZoomControls], ['cambio file', setupChangeFileButton],
+        ['licenza', setupLicenseScreen], ['banner aggiornamenti', setupUpdateBanner],
+        ['download grafici', setupChartDownloads], ['confronto scenari', setupScenarioCompareTab],
+        ['accesso cloud', setupCloudAuth],
+    ];
+    for (const [nome, fn] of _avvii) {
+        try { fn(); }
+        catch (err) {
+            console.error(`[Startup] "${nome}" non inizializzato:`, err);
+            notify.registra('errore', 'avvio', `Componente "${nome}" non inizializzato`, err?.stack || String(err));
+        }
+    }
 
     // Inizializza modulo risorse (non invasivo)
     initResourceModule({
@@ -183,6 +284,12 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (!comm) return null;
             const resolvedId = scenarioId !== undefined ? scenarioId : activeScenarioId;
 
+            // La cache tiene il RISULTATO, non lo scenario grezzo: cachare il blob
+            // dentro scenarioManager sarebbe sbagliato, perche' syncManager scrive
+            // whatif_scenarios direttamente e la copia resterebbe vecchia dopo un pull.
+            const chiaveCache = codice + '|' + (resolvedId || '');
+            if (_cacheDateCommessa.has(chiaveCache)) return _cacheDateCommessa.get(chiaveCache);
+
             // computeScenario senza filtri data: vede tutti i mesi inclusi quelli
             // estesi da ritardo/smussamento. Il vdpAOP dei mesi con solo vdpRemaining
             // negativo viene già calcolato dal dataLoader come (remaining * prob) ≠ 0.
@@ -195,11 +302,11 @@ document.addEventListener('DOMContentLoaded', async () => {
                 .map(m => m.month)
                 .sort();
 
-            if (!withVdp.length) return null;
-            return {
-                dataInizio: withVdp[0],
-                dataFine:   withVdp[withVdp.length - 1],
-            };
+            const esito = withVdp.length
+                ? { dataInizio: withVdp[0], dataFine: withVdp[withVdp.length - 1] }
+                : null;
+            _cacheDateCommessa.set(chiaveCache, esito);
+            return esito;
         },
         getSelectedCommesse: () => {
             const activeKeys = Array.from(document.querySelectorAll('#filter-commessa .filter-chip.active'))
@@ -316,7 +423,7 @@ async function initCloudSync() {
             _currentUserRole = await getUserRole();
             _currentUserEmail = session.user.email || null;
             const result = await initSync();
-            updateCloudIndicator('connected');
+            _applicaEsitoSync(result);
             const emailEl = $('#cloud-user-email');
             if (emailEl) emailEl.textContent = session.user.email;
             _applyRoleRestrictions(_currentUserRole);
@@ -357,6 +464,8 @@ async function initCloudSync() {
         }
 
         if (status.dataChanged) {
+            // I dati arrivati dal cloud rendono obsolete le date gia' calcolate
+            _invalidaCacheDate();
             // Refresh scenario dropdown (new/modified scenarios from cloud)
             loadScenarioList();
             if (activeScenarioId) {
@@ -571,7 +680,7 @@ function setupCloudAuth() {
             _currentUserRole = await getUserRole();
             _currentUserEmail = email;
             const result = await initSync();
-            updateCloudIndicator('connected');
+            _applicaEsitoSync(result);
             $('#cloud-user-email').textContent = email;
             _applyRoleRestrictions(_currentUserRole);
 
@@ -617,7 +726,7 @@ function setupCloudAuth() {
                     modal.classList.add('hidden');
                     updateCloudIndicator('syncing');
                     const result = await initSync();
-                    updateCloudIndicator('connected');
+                    _applicaEsitoSync(result);
                     // If data was pulled, load the app
                     if (result === 'pulled') {
                         const saved = loadBaseline();
@@ -643,7 +752,7 @@ function setupCloudAuth() {
                 modal.classList.add('hidden');
                 updateCloudIndicator('syncing');
                 const result = await initSync();
-                updateCloudIndicator('connected');
+                _applicaEsitoSync(result);
                 if (result === 'pulled') {
                     const saved = loadBaseline();
                     if (saved) {
@@ -942,6 +1051,7 @@ async function handleFile(file) {
 
         appData = parseExcel(buf);
         saveBaseline(appData);
+        _invalidaCacheDate(); // baseline nuova: tutte le date vanno ricalcolate
         fill.style.width = '90%';
         txt.textContent = 'Inizializzazione...';
 
@@ -950,14 +1060,23 @@ async function handleFile(file) {
         txt.textContent = 'Fatto!';
 
         await new Promise(r => setTimeout(r, 400));
+
+        // initApp() PRIMA di nascondere l'overlay: se il file e' malformato l'errore
+        // resta visibile, invece di lasciare a video un'applicazione vuota.
+        initApp();
+
         overlay.classList.add('hidden');
         $('#app').classList.remove('hidden');
-
-        initApp();
     } catch (err) {
+        overlay.classList.remove('hidden');
+        $('#app').classList.add('hidden');
         txt.textContent = '❌ Errore: ' + err.message;
         fill.style.width = '100%';
         fill.style.background = 'var(--danger)';
+        // La baseline difettosa era gia' stata salvata: va rimossa, altrimenti al
+        // riavvio l'app riparte dallo stesso file rotto.
+        try { clearBaseline(); } catch { /* niente da ripulire */ }
+        notify.registra('errore', 'import-excel', err?.message || 'Import fallito', err?.stack || null);
         console.error(err);
     }
 }
@@ -1318,15 +1437,20 @@ function loadScenarioList() {
         sel.value = activeScenarioId;
     }
 
-    sel.addEventListener('change', () => {
-        activeScenarioId = sel.value === '__baseline__' ? null : sel.value;
-        comparedScenarioIds = null; // esci da modalità confronto se attiva
-        refreshDashboard();
-        renderAssumptionsTable();
-        if (document.querySelector('.tab-btn.active')?.dataset.tab === 'risorse') {
-            renderResourceTab();
-        }
-    });
+    // Registrato UNA sola volta: sel.innerHTML='' svuota le option ma non rimuove
+    // i listener, e loadScenarioList viene invocata da nove punti diversi.
+    if (!_listenerScenarioRegistrato) {
+        _listenerScenarioRegistrato = true;
+        sel.addEventListener('change', () => {
+            activeScenarioId = sel.value === '__baseline__' ? null : sel.value;
+            comparedScenarioIds = null; // esci da modalità confronto se attiva
+            _invalidaCacheDate();       // le date dipendono dallo scenario attivo
+            refreshDashboard();         // esegue gia' renderAssumptionsTable()
+            if (document.querySelector('.tab-btn.active')?.dataset.tab === 'risorse') {
+                renderResourceTab();
+            }
+        });
+    }
 
     loadScenariCompareSelects(scenarios);
 }
@@ -1421,13 +1545,12 @@ function setupScenarioButtons() {
         refreshDashboard();
     });
 
-    $('#btn-delete-scenario')?.addEventListener('click', () => {
+    $('#btn-delete-scenario')?.addEventListener('click', async () => {
         if (!activeScenarioId) return;
         const scenDel = getScenario(activeScenarioId);
         if (scenDel?.locked) { alert('Questo scenario è bloccato e non può essere eliminato.'); return; }
         if (!confirm('Eliminare questo scenario?')) return;
-        trackDeletion('scenario', activeScenarioId);
-        deleteScenario(activeScenarioId);
+        await eliminaScenarioConAllocazioni(activeScenarioId);
         activeScenarioId = null;
         loadScenarioList();
         comparedScenarioIds = null; // Exit comparison mode
@@ -1713,8 +1836,7 @@ function _gestioneAction(action, localId, scenName, cloudScenData) {
                 setScenarioDraft(localId, false);
             } else if (action === 'delete') {
                 await pushScenarioDelete(localId);
-                deleteScenario(localId);
-                trackDeletion('scenario', localId);
+                await eliminaScenarioConAllocazioni(localId);
             } else if (action === 'restore') {
                 await pushScenarioRestore(localId);
             }
@@ -4537,7 +4659,23 @@ function setupExportEvents() {
                 if (!confirm(msg)) return;
 
                 for (const [key, val] of Object.entries(backup.data)) {
-                    localStorage.setItem(key, val);
+                    safeSetItem(key, val);
+                }
+                // Senza questo, il full pull all'avvio successivo riscaricherebbe il
+                // cloud sopra il backup appena ripristinato. Marcando le righe come
+                // da sincronizzare, la fusione le conserva e le ripropaga.
+                const _mappaRipristino = {
+                    whatif_persone: 'persona',
+                    whatif_allocazioni: 'allocazione',
+                    whatif_ruoli: 'ruolo',
+                    whatif_scenarios: 'scenario',
+                };
+                for (const [key, tipo] of Object.entries(_mappaRipristino)) {
+                    if (!backup.data[key]) continue;
+                    try {
+                        const righe = JSON.parse(backup.data[key]);
+                        if (Array.isArray(righe)) trackChanges(tipo, righe.map(r => r.id).filter(Boolean));
+                    } catch { /* chiave non ripristinabile: la salta */ }
                 }
                 closeModal('export-modal');
                 alert('Backup ripristinato con successo. L\'applicazione verrà ricaricata.');

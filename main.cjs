@@ -6,10 +6,21 @@ const os    = require('os');
 const path  = require('path');
 const https = require('https');
 
-// Reindirizza i log di electron-updater su file (utile per debug in produzione)
 // File: %AppData%\analisi-scenari-vdp\logs\main.log
+// Prima qui finiva SOLO l'auto-updater: 2.287 righe in sei mesi, nessuna utile a
+// capire cosa fosse andato storto sul PC di un utente.
+log.initialize();
+log.transports.file.level = 'info';
+log.transports.file.maxSize = 5 * 1024 * 1024; // 5 MB, poi ruota
+log.errorHandler.startCatching({ showDialog: false });
+
 autoUpdater.logger = log;
 autoUpdater.logger.transports.file.level = 'info';
+
+// Riga di apertura: versione, sistema, percorso dei log. È la prima cosa da
+// guardare quando arriva una segnalazione.
+log.info('─'.repeat(60));
+log.info(`Avvio  v${app.getVersion()}  ${process.platform} ${os.release()}  electron ${process.versions.electron}`);
 
 // ─── LICENZA LEMON SQUEEZY ────────────────────────────────────────────────────
 //
@@ -149,6 +160,22 @@ ipcMain.handle('license:clear',     ()        => deactivateLicense());
 ipcMain.handle('license:getInfo',   ()        => getLicenseInfo());
 
 // IPC handlers — utilità
+// Errori inoltrati dal renderer (src/notify.js)
+ipcMain.on('diag:log', (_e, livello, contesto, messaggio, dettaglio) => {
+    const riga = `[renderer/${contesto}] ${messaggio}` + (dettaglio ? `\n${dettaglio}` : '');
+    if (livello === 'errore') log.error(riga);
+    else if (livello === 'avviso') log.warn(riga);
+    else log.info(riga);
+});
+
+ipcMain.handle('diag:apriCartellaLog', async () => {
+    const file = log.transports.file.getFile()?.path;
+    if (file) { shell.showItemInFolder(file); return file; }
+    const cartella = path.join(app.getPath('userData'), 'logs');
+    await shell.openPath(cartella);
+    return cartella;
+});
+
 ipcMain.handle('shell:openExternal', (_, url) => shell.openExternal(url));
 ipcMain.handle('app:getVersion',     ()        => app.getVersion());
 ipcMain.handle('window:focus', (event) => {
@@ -339,6 +366,42 @@ function createWindow() {
                 { role: 'zoomOut',        label: 'Riduci' },
                 { type: 'separator' },
                 { role: 'togglefullscreen', label: 'Schermo intero' }
+            ]
+        },
+        {
+            label: 'Diagnostica',
+            submenu: [
+                {
+                    label: 'Apri cartella dei log',
+                    click: () => {
+                        const file = log.transports.file.getFile()?.path;
+                        if (file) shell.showItemInFolder(file);
+                        else shell.openPath(path.join(app.getPath('userData'), 'logs'));
+                    }
+                },
+                {
+                    label: 'Informazioni per l\'assistenza',
+                    click: () => {
+                        const file = log.transports.file.getFile()?.path || '(non disponibile)';
+                        dialog.showMessageBox({
+                            type: 'info',
+                            title: 'Informazioni per l\'assistenza',
+                            message: `Analisi Scenari VDP ${app.getVersion()}`,
+                            detail:
+                                `Sistema: ${process.platform} ${os.release()}\n` +
+                                `Electron: ${process.versions.electron}  ·  Chromium: ${process.versions.chrome}\n\n` +
+                                `File di log:\n${file}\n\n` +
+                                'In caso di problemi, allegare questo file alla segnalazione.',
+                            buttons: ['Chiudi', 'Apri cartella'],
+                            defaultId: 0,
+                        }).then(({ response }) => {
+                            if (response === 1) {
+                                if (file && file !== '(non disponibile)') shell.showItemInFolder(file);
+                                else shell.openPath(path.join(app.getPath('userData'), 'logs'));
+                            }
+                        });
+                    }
+                },
             ]
         },
         {

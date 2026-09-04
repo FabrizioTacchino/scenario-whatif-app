@@ -12,6 +12,13 @@ contextBridge.exposeInMainWorld('licenseAPI', {
 });
 
 contextBridge.exposeInMainWorld('electronAPI', {
+    // Inoltra al processo principale gli errori del renderer, che li scrive su file.
+    // Senza questo canale un errore lato interfaccia non lasciava alcuna traccia
+    // recuperabile dal PC dell'utente.
+    logError: (livello, contesto, messaggio, dettaglio) =>
+        ipcRenderer.send('diag:log', String(livello || 'errore'), String(contesto || ''),
+                         String(messaggio || ''), dettaglio ? String(dettaglio) : null),
+    apriCartellaLog: () => ipcRenderer.invoke('diag:apriCartellaLog'),
     openExternal:  (url)    => ipcRenderer.invoke('shell:openExternal', url),
     getVersion:    ()       => ipcRenderer.invoke('app:getVersion'),
     setZoomFactor: (factor) => webFrame.setZoomFactor(factor),

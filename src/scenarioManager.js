@@ -2,6 +2,8 @@
  * scenarioManager.js — CRUD for scenarios in localStorage
  */
 
+import { safeSetItem, trackChanges } from './storage.js';
+
 const STORAGE_KEY = 'whatif_scenarios';
 
 function generateId() {
@@ -17,8 +19,13 @@ function loadAll() {
     }
 }
 
-function saveAll(scenarios) {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(scenarios));
+function saveAll(scenarios, changedIds = null) {
+    safeSetItem(STORAGE_KEY, JSON.stringify(scenarios));
+    if (changedIds && changedIds.length) trackChanges('scenario', changedIds);
+    // Segnala il cambiamento a chi tiene risultati derivati in memoria (le date
+    // effettive di commessa dipendono da inputs, ritardo e shift dello scenario).
+    try { window.dispatchEvent(new CustomEvent('whatif:scenariCambiati')); }
+    catch { /* fuori dal browser */ }
 }
 
 export function listScenarios() {
@@ -47,7 +54,7 @@ export function createScenario(name, notes = '', type = 'calculated', importedDa
         createdBy: createdBy || '',
     };
     scenarios.push(scen);
-    saveAll(scenarios);
+    saveAll(scenarios, [scen.id]);
     return scen;
 }
 
@@ -70,7 +77,7 @@ export function duplicateScenario(id, overrides = {}) {
         createdBy: overrides.createdBy || orig.createdBy || '',
     };
     scenarios.push(dup);
-    saveAll(scenarios);
+    saveAll(scenarios, [dup.id]);
     return dup;
 }
 
@@ -80,7 +87,7 @@ export function updateScenario(id, updates) {
     if (idx === -1) return null;
     if (scenarios[idx].locked) return null; // locked scenarios cannot be modified
     Object.assign(scenarios[idx], updates, { updatedAt: new Date().toISOString() });
-    saveAll(scenarios);
+    saveAll(scenarios, [id]);
     return scenarios[idx];
 }
 
@@ -93,7 +100,7 @@ export function updateScenarioInput(scenarioId, commessaKey, inputUpdates) {
     if (!scen.inputs[commessaKey]) scen.inputs[commessaKey] = {};
     Object.assign(scen.inputs[commessaKey], inputUpdates);
     scen.updatedAt = new Date().toISOString();
-    saveAll(scenarios);
+    saveAll(scenarios, [scenarioId]);
     return scen;
 }
 
@@ -138,7 +145,7 @@ export function lockScenario(id, email) {
     scen.lockedAt = new Date().toISOString();
     scen.snapshotAt = scen.lockedAt;
     scen.updatedAt = new Date().toISOString();
-    saveAll(scenarios);
+    saveAll(scenarios, [id]);
     return scen;
 }
 
@@ -152,7 +159,7 @@ export function unlockScenario(id) {
     // Cancella snapshot costi: i valori tornano ad essere ricalcolati dinamicamente
     if (scen.costiSnapshot !== undefined) scen.costiSnapshot = null;
     scen.updatedAt = new Date().toISOString();
-    saveAll(scenarios);
+    saveAll(scenarios, [id]);
     return scen;
 }
 
@@ -162,7 +169,7 @@ export function setScenarioDraft(id, draftValue) {
     if (!scen) return null;
     scen.draft = draftValue;
     scen.updatedAt = new Date().toISOString();
-    saveAll(scenarios);
+    saveAll(scenarios, [id]);
     return scen;
 }
 
@@ -179,6 +186,7 @@ export function renameCommessaKey(oldKey, newKey) {
     if (!oldKey || !newKey || oldKey === newKey) return 0;
     const scenarios = loadAll();
     let count = 0;
+    const toccati = [];
     for (const scen of scenarios) {
         let changed = false;
         if (scen.inputs?.[oldKey] !== undefined) {
@@ -197,9 +205,9 @@ export function renameCommessaKey(oldKey, newKey) {
                 if (c.key === oldKey) { c.key = newKey; changed = true; }
             }
         }
-        if (changed) { scen.updatedAt = new Date().toISOString(); count++; }
+        if (changed) { scen.updatedAt = new Date().toISOString(); toccati.push(scen.id); count++; }
     }
-    if (count > 0) saveAll(scenarios);
+    if (count > 0) saveAll(scenarios, toccati);
     return count;
 }
 
@@ -222,7 +230,7 @@ export function saveBaseline(appData) {
             allMonths: appData.allMonths,
             filters: appData.filters,
         };
-        localStorage.setItem(BASELINE_KEY, JSON.stringify(serializable));
+        safeSetItem(BASELINE_KEY, JSON.stringify(serializable));
     } catch (e) {
         console.warn('Impossibile salvare la baseline in localStorage:', e);
     }
@@ -236,11 +244,18 @@ export function loadBaseline() {
         const raw = localStorage.getItem(BASELINE_KEY);
         if (!raw) return null;
         const parsed = JSON.parse(raw);
+        // Verifica la forma minima: prima bastava che il JSON fosse valido, e una
+        // baseline troncata apriva l'app vuota facendo poi esplodere populateFilters.
+        if (!parsed || !Array.isArray(parsed.commesse) || !Array.isArray(parsed.allMonths)
+            || !Array.isArray(parsed.monthlyData)) {
+            console.warn('[scenarioManager] baseline salvata incompleta: ignorata');
+            return null;
+        }
         return {
             commesse: parsed.commesse,
             monthlyData: new Map(parsed.monthlyData),
             allMonths: parsed.allMonths,
-            filters: parsed.filters,
+            filters: parsed.filters || { settori: [], types: [] },
         };
     } catch {
         return null;
