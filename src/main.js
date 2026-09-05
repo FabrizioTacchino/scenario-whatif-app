@@ -112,6 +112,14 @@ function _applicaEsitoSync(result) {
  * Va svuotata ogni volta che cambiano gli scenari o la baseline: lo fa
  * _invalidaCacheDate(), richiamata dai punti di modifica e dal sync.
  */
+// Elenco chiuso dei ruoli riconosciuti. Serve a non rimandare a schermo un valore
+// arbitrario proveniente dal canale Presence, che non è autenticato.
+const ETICHETTE_RUOLO = {
+    admin: 'Admin', editor: 'Editor', hr: 'HR',
+    commercial: 'Commerciale', tester: 'Tester', viewer: 'Viewer',
+    disabled: 'Disattivato',
+};
+
 const _cacheDateCommessa = new Map();
 let _listenerScenarioRegistrato = false;
 
@@ -489,14 +497,31 @@ async function initCloudSync() {
         if (users.length > 0) {
             indicator.classList.remove('hidden');
             countEl.textContent = users.length;
-            listEl.innerHTML = users.map(u => {
-                const name = u.email ? u.email.split('@')[0] : '?';
-                const roleLabel = u.role === 'admin' ? 'Admin' : u.role === 'editor' ? 'Editor' : u.role === 'hr' ? 'HR' : u.role === 'commercial' ? 'Commerciale' : u.role || '';
-                return `<div style="padding:3px 0;display:flex;justify-content:space-between;align-items:center;">
-                    <span style="color:var(--text);">${name}</span>
-                    <span style="color:var(--text-muted);font-size:10px;background:var(--bg-2,#f0f0f0);padding:1px 6px;border-radius:3px;">${roleLabel}</span>
-                </div>`;
-            }).join('');
+            // Nome e ruolo arrivano dal canale Presence, che non è protetto: chiunque
+            // abbia la chiave pubblica dell'app può annunciarsi con valori inventati.
+            // Prima finivano in innerHTML, quindi un testo scritto da altri veniva
+            // interpretato invece che mostrato — e lo subivano tutti i collegati,
+            // anche a tendina chiusa. Ora si costruiscono nodi con textContent.
+            listEl.textContent = '';
+            for (const u of users) {
+                const riga = document.createElement('div');
+                riga.style.cssText = 'padding:3px 0;display:flex;justify-content:space-between;align-items:center;';
+
+                const spanNome = document.createElement('span');
+                spanNome.style.color = 'var(--text)';
+                spanNome.textContent = u.email ? String(u.email).split('@')[0] : '?';
+                riga.appendChild(spanNome);
+
+                const spanRuolo = document.createElement('span');
+                spanRuolo.style.cssText = 'color:var(--text-muted);font-size:10px;'
+                    + 'background:var(--bg-2,#f0f0f0);padding:1px 6px;border-radius:3px;';
+                // Elenco chiuso: un ruolo non riconosciuto diventa etichetta vuota,
+                // invece di essere mostrato così com'è arrivato.
+                spanRuolo.textContent = ETICHETTE_RUOLO[u.role] || '';
+                riga.appendChild(spanRuolo);
+
+                listEl.appendChild(riga);
+            }
         } else {
             indicator.classList.add('hidden');
         }

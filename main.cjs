@@ -176,7 +176,34 @@ ipcMain.handle('diag:apriCartellaLog', async () => {
     return cartella;
 });
 
-ipcMain.handle('shell:openExternal', (_, url) => shell.openExternal(url));
+/**
+ * Apre un indirizzo nel browser di sistema, ma solo se è davvero un indirizzo web.
+ *
+ * Prima accettava qualunque stringa: non solo http, ma anche percorsi di rete UNC
+ * (che fanno uscire l'hash NTLM) o richiami a programmi locali. Da solo non era
+ * sfruttabile, ma era il moltiplicatore che avrebbe trasformato una lettura di dati
+ * in esecuzione di codice. L'unico chiamante legittimo è il pulsante della licenza
+ * (src/main.js:366), che usa un https.
+ */
+const PROTOCOLLI_AMMESSI = new Set(['https:', 'mailto:']);
+
+function apriEsterno(url) {
+    let protocollo;
+    try {
+        protocollo = new URL(String(url)).protocol;
+    } catch {
+        log.warn(`[sicurezza] Indirizzo non valido, apertura rifiutata: ${String(url).slice(0, 120)}`);
+        return false;
+    }
+    if (!PROTOCOLLI_AMMESSI.has(protocollo)) {
+        log.warn(`[sicurezza] Protocollo "${protocollo}" non ammesso, apertura rifiutata: ${String(url).slice(0, 120)}`);
+        return false;
+    }
+    shell.openExternal(url);
+    return true;
+}
+
+ipcMain.handle('shell:openExternal', (_, url) => apriEsterno(url));
 ipcMain.handle('app:getVersion',     ()        => app.getVersion());
 ipcMain.handle('window:focus', (event) => {
     const win = BrowserWindow.fromWebContents(event.sender);
@@ -332,7 +359,7 @@ function createWindow() {
 
     // Apre i link esterni nel browser di sistema invece che in una nuova finestra Electron
     win.webContents.setWindowOpenHandler(({ url }) => {
-        shell.openExternal(url);
+        apriEsterno(url); // stessa verifica del canale IPC
         return { action: 'deny' };
     });
 
