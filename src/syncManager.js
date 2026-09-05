@@ -2139,6 +2139,37 @@ export async function pushSingleScenario(localId, scenarioData) {
  * le allocazioni nel localStorage del chiamante (post-dedup), e quelle
  * di altri utenti restano nel cloud.
  */
+/**
+ * Elimina DEFINITIVAMENTE uno scenario dal cloud, insieme a tutte le sue
+ * allocazioni. Diversa da pushScenarioDelete(), che si limita a marcarlo come
+ * cancellato lasciandolo nel cestino.
+ *
+ * Serviva: gli scenari nel cestino restavano per sempre e le loro allocazioni
+ * continuavano a essere sincronizzate a ogni ciclo pur non essendo lette da
+ * nessuna vista. Nei dati reali erano il 59% del totale.
+ *
+ * Le allocazioni vanno eliminate PRIMA dello scenario: se fallisse il secondo
+ * passo resterebbe uno scenario senza allocazioni (recuperabile), non delle
+ * allocazioni orfane (il problema che stiamo togliendo di mezzo).
+ */
+export async function purgeScenarioCloud(localId) {
+    if (!localId) throw new Error('Scenario non identificato');
+
+    const { error: errAlloc, count } = await supabase
+        .from('allocazioni')
+        .delete({ count: 'exact' })
+        .eq('scenario_local_id', localId);
+    if (errAlloc) throw new Error(`Eliminazione allocazioni fallita: ${errAlloc.message}`);
+
+    const { error: errScen } = await supabase
+        .from('scenarios')
+        .delete()
+        .eq('local_id', localId);
+    if (errScen) throw new Error(`Eliminazione scenario fallita: ${errScen.message}`);
+
+    return { allocazioniRimosse: count || 0 };
+}
+
 export async function deleteAllocazioniScenarioCloud(scenarioId) {
     if (_pushBlocked) throw new Error('Versione dell\'app troppo vecchia. Aggiorna per poter modificare i dati.');
     if (!canWrite('whatif_allocazioni')) return;

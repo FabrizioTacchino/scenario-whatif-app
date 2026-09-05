@@ -19,7 +19,7 @@ import * as notify from './notify.js';
 import { computeResourceMatrix, computeResourceKpis } from './resourceEngine.js';
 import { generateReport } from './reportGenerator.js';
 import { supabase, signIn, signUp, signOut, getSession, onAuthStateChange, getUserRole, listUsers, updateUserRole } from './supabaseClient.js';
-import { initSync, stopSync, fullPush, fullPull, getSyncStatus, onSyncStatusChange, incrementalSync, trackDeletion, getCurrentRole, canWrite, fetchAllScenariosFromCloud, pushScenarioApproval, pushScenarioDelete, pushSingleScenario, pushScenarioRestore, onPresenceChange, getOnlineUsers, deleteAllocazioniScenarioCloud } from './syncManager.js';
+import { initSync, stopSync, fullPush, fullPull, getSyncStatus, onSyncStatusChange, incrementalSync, trackDeletion, getCurrentRole, canWrite, fetchAllScenariosFromCloud, pushScenarioApproval, pushScenarioDelete, pushSingleScenario, pushScenarioRestore, onPresenceChange, getOnlineUsers, deleteAllocazioniScenarioCloud, purgeScenarioCloud } from './syncManager.js';
 import { Chart, registerables } from 'chart.js';
 import ChartDataLabels from 'chartjs-plugin-datalabels';
 
@@ -1759,6 +1759,17 @@ async function renderGestioneScenari(useCache = false) {
             restoreBtn.textContent = 'Ripristina';
             restoreBtn.addEventListener('click', () => _gestioneAction('restore', row.local_id, scen.name || row.local_id, scen));
             tdActions.appendChild(restoreBtn);
+
+            // Eliminazione definitiva: senza questa, gli scenari nel cestino
+            // restavano per sempre e le loro allocazioni continuavano a viaggiare
+            // a ogni sincronizzazione senza essere lette da nessuna vista.
+            const purgeBtn = document.createElement('button');
+            purgeBtn.className = 'btn btn-outline btn-xs';
+            purgeBtn.style.color = 'var(--danger)';
+            purgeBtn.textContent = 'Elimina definitivamente';
+            purgeBtn.title = 'Rimuove lo scenario e le sue allocazioni. Non sarà più ripristinabile.';
+            purgeBtn.addEventListener('click', () => _gestioneAction('purge', row.local_id, scen.name || row.local_id, scen));
+            tdActions.appendChild(purgeBtn);
         } else {
             // Lock/Unlock
             const lockBtn = document.createElement('button');
@@ -1824,14 +1835,20 @@ function _gestioneAction(action, localId, scenName, cloudScenData) {
         unlock: 'Sbloccare scenario?',
         approve: 'Approvare bozza?',
         delete: 'Eliminare scenario?',
-        restore: 'Ripristinare scenario?'
+        restore: 'Ripristinare scenario?',
+        purge: 'Eliminare definitivamente?'
     };
     const messages = {
         lock: 'Lo scenario "' + scenName + '" sarà bloccato. Nessuno potrà modificarlo o eliminarlo.',
         unlock: 'Lo scenario "' + scenName + '" sarà sbloccato e nuovamente modificabile.',
         approve: 'La bozza "' + scenName + '" diventerà visibile a tutti gli utenti.',
         delete: 'Lo scenario "' + scenName + '" sarà eliminato definitivamente dal cloud.',
-        restore: 'Lo scenario "' + scenName + '" sarà ripristinato e tornerà visibile a tutti.'
+        restore: 'Lo scenario "' + scenName + '" sarà ripristinato e tornerà visibile a tutti.',
+        purge: 'Lo scenario "' + scenName + '" e TUTTE le sue allocazioni saranno rimossi '
+             + 'in modo permanente, dal cloud e da questo PC.\n\n'
+             + 'Non sarà più possibile ripristinarlo. Gli scenari lasciati nel cestino '
+             + 'continuano invece a essere sincronizzati a ogni ciclo pur non essendo '
+             + 'visibili: eliminarli definitivamente alleggerisce l\'applicazione.'
     };
 
     $('#gestione-confirm-title').textContent = titles[action] || 'Conferma';
@@ -1872,6 +1889,14 @@ function _gestioneAction(action, localId, scenName, cloudScenData) {
                 await eliminaScenarioConAllocazioni(localId);
             } else if (action === 'restore') {
                 await pushScenarioRestore(localId);
+            } else if (action === 'purge') {
+                // Prima il cloud: se fallisce, in locale non è stato toccato nulla
+                const esito = await purgeScenarioCloud(localId);
+                // Poi la copia locale, se presente
+                try { deleteAllocazioniScenario(localId); } catch { /* può non esistere */ }
+                try { deleteScenario(localId); } catch { /* idem */ }
+                notify.successo(`Scenario eliminato definitivamente`
+                    + (esito.allocazioniRimosse ? ` insieme a ${esito.allocazioniRimosse} allocazioni.` : '.'));
             }
             // Refresh: clear cache to re-fetch from cloud
             _gestioneCloudData = null;
