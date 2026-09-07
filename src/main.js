@@ -131,6 +131,27 @@ function _invalidaCacheDate() {
 try { window.addEventListener('whatif:scenariCambiati', _invalidaCacheDate); }
 catch { /* fuori dal browser */ }
 
+/**
+ * Impedisce che la rotellina del mouse modifichi i campi numerici.
+ *
+ * In Chromium un <input type="number"> che ha il fuoco cambia valore quando ci
+ * si scorre sopra. Bastava cliccare su "Probabilità" e poi scorrere la pagina
+ * per alterare il numero: la modifica veniva salvata all'uscita dal campo,
+ * senza che nulla lo segnalasse.
+ *
+ * Si toglie il fuoco invece di bloccare l'evento: così il valore non cambia
+ * E la pagina scorre normalmente. Bloccando l'evento, la pagina resterebbe ferma
+ * ogni volta che il puntatore passa sopra un campo.
+ */
+function _proteggiCampiNumericiDallaRotella() {
+    document.addEventListener('wheel', (e) => {
+        const el = e.target;
+        if (el instanceof HTMLInputElement && el.type === 'number' && document.activeElement === el) {
+            el.blur();
+        }
+    }, { capture: true, passive: true });
+}
+
 function _restoreFocus() {
     const fix = () => {
         if (window.electronAPI?.focusWindow) window.electronAPI.focusWindow();
@@ -244,6 +265,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     notify.installaCatturaGlobale();
     _setupStorageAlert();
+    _proteggiCampiNumericiDallaRotella();
 
     // Ogni inizializzazione e' isolata: se una fallisce le altre partono comunque
     // e la schermata licenza non resta bloccata a video (prima era l'ultima
@@ -3683,13 +3705,22 @@ function renderAssumptionsTable() {
             if (!field) return;
             const val = e.target.value === '' ? null : Number(e.target.value);
 
-            // Validation
-            if (field === 'probabilita' && val != null && (val < 0 || val > 100)) {
-                e.target.value = '';
-                return;
-            }
-            if (field === 'margine' && val != null && (val < -100 || val > 100)) {
-                e.target.value = '';
+            // Fuori scala: prima il campo veniva svuotato e la funzione usciva
+            // SENZA salvare. Risultato: si vedeva un campo vuoto e si credeva di
+            // aver tolto l'override, mentre il valore precedente restava salvato.
+            // Ora il campo torna a mostrare quello che è davvero memorizzato, e
+            // viene detto perché. Il campo lasciato vuoto a mano continua a
+            // valere come "nessun override": è un caso diverso e resta valido.
+            const _limiti = {
+                probabilita: [0, 100, 'La probabilità deve essere fra 0 e 100.'],
+                margine:     [-100, 100, 'Il margine deve essere fra -100 e 100.'],
+            };
+            const _limite = _limiti[field];
+            if (_limite && val != null && (val < _limite[0] || val > _limite[1])) {
+                const salvato = getScenario(activeScenarioId)?.inputs?.[key]?.[field];
+                e.target.value = (salvato != null && salvato !== '') ? salvato : '';
+                notify.avviso(_limite[2] + ' Valore non applicato.',
+                              { dettaglio: `${key.split('|||')[0]} — hai inserito ${val}` });
                 return;
             }
             if ((field === 'shiftStart' || field === 'ritardo') && val != null && !Number.isInteger(val)) {
