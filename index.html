@@ -1526,11 +1526,9 @@
             <span>Ultimo sync: </span><span id="cloud-last-sync">--</span>
           </div>
           <div style="display:flex;gap:8px;">
-            <button id="btn-cloud-force-push" class="btn btn-outline btn-sm" style="flex:1;" title="Invia tutti i dati locali al cloud">
-              Carica nel Cloud
-            </button>
-            <button id="btn-cloud-force-pull" class="btn btn-outline btn-sm" style="flex:1;" title="Scarica tutti i dati dal cloud">
-              Scarica dal Cloud
+            <button id="btn-cloud-sync-now" class="btn btn-outline btn-sm" style="flex:1;"
+                    title="Scarica gli aggiornamenti dal cloud e invia le tue modifiche in sospeso. Nell'uso normale non serve: l'app lo fa da sola.">
+              Sincronizza adesso
             </button>
           </div>
           <!-- Admin panel -->
@@ -1558,31 +1556,6 @@
           </div>
           <button id="btn-cloud-logout" class="btn btn-ghost btn-sm" style="width:100%;margin-top:12px;color:var(--danger);">
             Disconnetti
-          </button>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- CLOUD SYNC CONFLICT MODAL -->
-  <div id="cloud-conflict-modal" class="modal hidden">
-    <div class="modal-backdrop"></div>
-    <div class="modal-content modal-sm" style="max-width:420px;">
-      <div class="modal-header">
-        <h3>Dati trovati su entrambi i lati</h3>
-        <button class="modal-close" id="cloud-conflict-close">&times;</button>
-      </div>
-      <div class="modal-body" style="text-align:center;">
-        <p style="margin-bottom:16px;font-size:13px;">Esistono dati sia in locale che nel cloud. Come vuoi procedere?</p>
-        <div style="display:flex;flex-direction:column;gap:8px;">
-          <button id="btn-conflict-local" class="btn btn-outline" style="width:100%;">
-            Usa dati locali (sovrascrive cloud)
-          </button>
-          <button id="btn-conflict-cloud" class="btn btn-outline" style="width:100%;">
-            Usa dati cloud (sovrascrive locale)
-          </button>
-          <button id="btn-conflict-merge" class="btn btn-primary" style="width:100%;">
-            Unisci (merge automatico)
           </button>
         </div>
       </div>

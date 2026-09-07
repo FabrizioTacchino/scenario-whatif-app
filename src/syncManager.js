@@ -347,6 +347,63 @@ export async function fullPush(userId) {
 }
 
 /**
+ * Sincronizzazione manuale: scarica tutto, poi invia SOLO le righe modificate qui.
+ *
+ * Sostituisce i due pulsanti precedenti. Quello di caricamento faceva un fullPush,
+ * cioè rimandava su l'INTERA tabella locale marcando ogni riga come non cancellata:
+ *   - resuscitava le righe che nel frattempo erano state eliminate dal cloud;
+ *   - sovrascriveva con la propria copia vecchia le modifiche appena fatte da altri;
+ *   - ritimbrava tutto, rigenerando la tempesta di eventi realtime.
+ *
+ * Scaricando PRIMA si ricevono le cancellazioni e le modifiche altrui, e solo dopo
+ * si manda ciò che si è davvero toccato: stesso scopo, nessuno dei tre effetti.
+ */
+export async function sincronizzaAdesso(userId) {
+    if (!userId) {
+        const session = await getSession();
+        if (!session) throw new Error('Non sei collegato al cloud.');
+        userId = session.user.id;
+    }
+
+    return _serializza(async () => {
+        _syncing = true;
+        try {
+            _setStatus({ state: 'syncing' });
+
+            // 1. scarica: _mergeRows conserva le righe non ancora inviate
+            await fullPull(userId);
+
+            // 2. invia solo le proprie modifiche in sospeso
+            const daInviare = countPendingChanges();
+            let nonInviate = null;
+            for (const key of SYNC_KEYS) {
+                if (!canWrite(key)) continue;
+                try {
+                    await _pushEntityDirect(key, userId);
+                } catch (err) {
+                    nonInviate = err.message;
+                    console.warn(`[Sync manuale] invio di ${key} non riuscito:`, err.message);
+                }
+            }
+
+            const rimaste = countPendingChanges();
+            const serverNow = await _getServerTime();
+            safeSetItem(LAST_SYNC_KEY, serverNow);
+            _setStatus({
+                state: nonInviate ? 'error' : 'connected',
+                lastSync: serverNow,
+                pendingChanges: rimaste,
+                error: nonInviate,
+            });
+
+            return { inviate: daInviare - rimaste, rimaste, errore: nonInviate };
+        } finally {
+            _syncing = false;
+        }
+    });
+}
+
+/**
  * Full pull: download all shared data from Supabase to localStorage.
  */
 export async function fullPull(userId) {

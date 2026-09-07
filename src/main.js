@@ -19,7 +19,7 @@ import * as notify from './notify.js';
 import { computeResourceMatrix, computeResourceKpis } from './resourceEngine.js';
 import { generateReport } from './reportGenerator.js';
 import { supabase, signIn, signUp, signOut, getSession, onAuthStateChange, getUserRole, listUsers, updateUserRole } from './supabaseClient.js';
-import { initSync, stopSync, fullPush, fullPull, getSyncStatus, onSyncStatusChange, incrementalSync, trackDeletion, getCurrentRole, canWrite, fetchAllScenariosFromCloud, pushScenarioApproval, pushScenarioDelete, pushSingleScenario, pushScenarioRestore, onPresenceChange, getOnlineUsers, deleteAllocazioniScenarioCloud, purgeScenarioCloud } from './syncManager.js';
+import { initSync, stopSync, sincronizzaAdesso, getSyncStatus, onSyncStatusChange, trackDeletion, getCurrentRole, canWrite, fetchAllScenariosFromCloud, pushScenarioApproval, pushScenarioDelete, pushSingleScenario, pushScenarioRestore, onPresenceChange, getOnlineUsers, deleteAllocazioniScenarioCloud, purgeScenarioCloud } from './syncManager.js';
 import { Chart, registerables } from 'chart.js';
 import ChartDataLabels from 'chartjs-plugin-datalabels';
 
@@ -623,7 +623,6 @@ function updateCloudIndicator(state) {
 
 function setupCloudAuth() {
     const modal = $('#cloud-auth-modal');
-    const conflictModal = $('#cloud-conflict-modal');
     if (!modal) return;
 
     // Open modal — shared handler for both buttons
@@ -809,89 +808,69 @@ function setupCloudAuth() {
         }
     });
 
-    // Force push/pull — NO native confirm() to avoid Electron focus loss
-    $('#btn-cloud-force-push')?.addEventListener('click', async () => {
+    // Un solo comando manuale. Prima ce n'erano due: "Carica nel Cloud" faceva un
+    // fullPush, cioè rimandava su l'intera tabella locale marcando tutto come non
+    // cancellato — resuscitava righe eliminate da altri, sovrascriveva con la
+    // propria copia vecchia le loro modifiche, e ritimbrava tutto rigenerando la
+    // tempesta di eventi realtime. Nessuno di questi effetti era segnalato.
+    $('#btn-cloud-sync-now')?.addEventListener('click', async () => {
+        const btn = $('#btn-cloud-sync-now');
+        const testoOriginale = btn ? btn.textContent : '';
         try {
-            modal.classList.add('hidden');
+            if (btn) { btn.disabled = true; btn.textContent = 'Sincronizzo…'; }
             updateCloudIndicator('syncing');
-            await fullPush();
-            updateCloudIndicator('connected');
-            const lastSyncEl = $('#cloud-last-sync');
-            if (lastSyncEl) lastSyncEl.textContent = new Date().toLocaleString('it-IT');
-            _restoreFocus();
-        } catch (err) {
-            console.error('[CloudSync] force push error:', err);
-            updateCloudIndicator('error');
-            _restoreFocus();
-        }
-    });
 
-    $('#btn-cloud-force-pull')?.addEventListener('click', async () => {
-        try {
-            modal.classList.add('hidden');
-            updateCloudIndicator('syncing');
-            await fullPull();
-            updateCloudIndicator('connected');
+            const esito = await sincronizzaAdesso();
+
             const lastSyncEl = $('#cloud-last-sync');
             if (lastSyncEl) lastSyncEl.textContent = new Date().toLocaleString('it-IT');
+
+            // Il download può aver portato una baseline diversa: ricarico la vista
             const saved = loadBaseline();
-            if (saved) {
-                appData = saved;
-                initApp();
+            if (saved) { appData = saved; initApp(); }
+
+            if (esito?.errore) {
+                updateCloudIndicator('error');
+                notify.errore('Alcune modifiche non sono state inviate.', { dettaglio: esito.errore });
+            } else {
+                updateCloudIndicator('connected');
+                notify.successo(esito?.inviate
+                    ? `Sincronizzato: ${esito.inviate} modifiche inviate.`
+                    : 'Sincronizzato: era già tutto allineato.');
             }
             _restoreFocus();
         } catch (err) {
-            console.error('[CloudSync] force pull error:', err);
+            console.error('[CloudSync] sincronizzazione manuale fallita:', err);
             updateCloudIndicator('error');
+            notify.errore('Sincronizzazione non riuscita.', { dettaglio: err.message });
             _restoreFocus();
+        } finally {
+            if (btn) { btn.disabled = false; btn.textContent = testoOriginale; }
         }
     });
 
-    // Conflict modal handlers
-    $('#cloud-conflict-close')?.addEventListener('click', () => conflictModal?.classList.add('hidden'));
-    conflictModal?.querySelector('.modal-backdrop')?.addEventListener('click', () => conflictModal?.classList.add('hidden'));
-    $('#btn-conflict-local')?.addEventListener('click', async () => {
-        conflictModal?.classList.add('hidden');
-        updateCloudIndicator('syncing');
-        await fullPush();
-        updateCloudIndicator('connected');
-    });
-    $('#btn-conflict-cloud')?.addEventListener('click', async () => {
-        conflictModal?.classList.add('hidden');
-        updateCloudIndicator('syncing');
-        await fullPull();
-        updateCloudIndicator('connected');
-        const saved = loadBaseline();
-        if (saved) { appData = saved; initApp(); }
-        setTimeout(() => document.body.focus(), 100);
-    });
-    $('#btn-conflict-merge')?.addEventListener('click', async () => {
-        conflictModal?.classList.add('hidden');
-        updateCloudIndicator('syncing');
-        await incrementalSync();
-        updateCloudIndicator('connected');
-    });
 }
 
 function _applyRoleRestrictions(role) {
     const viewerBanner = $('#viewer-banner');
     const testerBanner = $('#tester-banner');
-    const pushBtn = $('#btn-cloud-force-push');
+    // Il pulsante manuale ora scarica e poi invia solo le proprie modifiche:
+    // resta utile a tutti, compresi i ruoli in sola lettura, per i quali si
+    // limita a scaricare (canWrite() esclude da solo l'invio).
+    const syncBtn = $('#btn-cloud-sync-now');
 
-    // Viewer: read-only banner, push disabled
     if (role === 'viewer') {
         viewerBanner?.classList.remove('hidden');
         testerBanner?.classList.add('hidden');
-        if (pushBtn) { pushBtn.disabled = true; pushBtn.title = 'Sola lettura'; }
+        if (syncBtn) syncBtn.title = 'Sola lettura: scarica gli aggiornamenti dal cloud';
     } else if (role === 'tester') {
-        // Tester: sandbox banner, push disabled (download only)
         viewerBanner?.classList.add('hidden');
         testerBanner?.classList.remove('hidden');
-        if (pushBtn) { pushBtn.disabled = true; pushBtn.title = 'Modalità test — upload disabilitato'; }
+        if (syncBtn) syncBtn.title = 'Modalità test: scarica dal cloud e invia i tuoi scenari come bozze';
     } else {
         viewerBanner?.classList.add('hidden');
         testerBanner?.classList.add('hidden');
-        if (pushBtn) { pushBtn.disabled = false; pushBtn.title = 'Invia tutti i dati locali al cloud'; }
+        if (syncBtn) syncBtn.title = 'Scarica gli aggiornamenti dal cloud e invia le tue modifiche in sospeso';
     }
 
     // Scenario buttons: disabled for viewer and hr (tester CAN edit locally)
@@ -940,10 +919,6 @@ function _applyRoleRestrictions(role) {
         }
     }
 
-    // Tester: update push button and banner for draft mode
-    if (role === 'tester') {
-        if (pushBtn) { pushBtn.disabled = false; pushBtn.title = 'Invia scenari come bozze al cloud'; }
-    }
 }
 
 async function _loadAdminUserList() {
