@@ -64,14 +64,42 @@ export function exportToExcel(monthly, commessaResults, scenarioName) {
     XLSX.writeFile(wb, filename);
 }
 
+// Ordine di uscita delle commesse nel file: prima le Backlog, poi le Order Intake.
+const ORDINE_TIPO = { 'Backlog': 0, 'Order Intake': 1 };
+
+/**
+ * Riordina le commesse per tipo, senza toccare l'array ricevuto.
+ *
+ * Serve solo a rendere comodo il file da modificare a mano: l'import raggruppa
+ * le righe per "Codice|||Nome" in una Map e riordina i mesi per data, quindi
+ * l'ordine dei blocchi nel foglio non cambia nulla al reimport.
+ *
+ * Si guarda il tipo EFFETTIVO, cioè quello che finisce davvero nella colonna
+ * "Type" del file: se lo scenario ha spostato una commessa da Backlog a Order
+ * Intake, viene ordinata come Order Intake, coerentemente con ciò che si legge.
+ *
+ * L'ordinamento è stabile (garantito dallo standard), quindi dentro ogni gruppo
+ * le commesse restano nell'ordine che hanno nell'app, cioè per codice.
+ */
+function ordinaPerTipo(commessaResults) {
+    const tipoDi = (c) => c.effectiveType || c.type || 'Backlog';
+    return [...commessaResults].sort((a, b) => {
+        const pa = ORDINE_TIPO[tipoDi(a)];
+        const pb = ORDINE_TIPO[tipoDi(b)];
+        // Un tipo non previsto finisce in fondo, senza mai sparire dal file
+        return (pa === undefined ? 99 : pa) - (pb === undefined ? 99 : pb);
+    });
+}
+
 /**
  * Export in template-compatible layout (re-importable as new baseline)
  * One row per commessa per month, columns matching Baseline_Template.xlsx
+ * Le commesse escono raggruppate: prima le Backlog, poi le Order Intake.
  */
 export function exportToTemplate(commessaResults, scenarioName) {
     const rows = [];
 
-    for (const comm of commessaResults) {
+    for (const comm of ordinaPerTipo(commessaResults)) {
         const months = comm.scenarioMonths || [];
         const prob = comm.effectiveProbabilita != null ? comm.effectiveProbabilita : (comm.probabilitaAOP != null ? comm.probabilitaAOP : 1);
         const marg = comm.effectiveMargine != null ? comm.effectiveMargine : (comm.margineAOP || 0);
