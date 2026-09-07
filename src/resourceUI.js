@@ -3475,7 +3475,12 @@ function _exportRisorse() {
 // ─── MODAL HELPERS ────────────────────────────────────────────
 
 function _openModal(id) { $(`#${id}`)?.classList.remove('hidden'); }
-function _closeModal(id) { $(`#${id}`)?.classList.add('hidden'); }
+function _closeModal(id) {
+    const m = $(`#${id}`);
+    if (!m) return;
+    delete m.dataset.compilata;   // chiusura dopo salvataggio: nessuna conferma
+    m.classList.add('hidden');
+}
 
 // ─── UI HELPERS ───────────────────────────────────────────────
 

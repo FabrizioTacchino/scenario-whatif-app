@@ -266,6 +266,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     notify.installaCatturaGlobale();
     _setupStorageAlert();
     _proteggiCampiNumericiDallaRotella();
+    _setupTastieraFinestre();
 
     // Ogni inizializzazione e' isolata: se una fallisce le altre partono comunque
     // e la schermata licenza non resta bloccata a video (prima era l'ultima
@@ -4413,21 +4414,94 @@ function setupModals() {
         closeModal('compare-modal');
     });
 
-    // Close modals
+    // Chiusura: se qualcosa è stato compilato, si chiede prima di buttarlo via
     for (const closeBtn of $$('.modal-close')) {
-        closeBtn.addEventListener('click', () => {
-            closeBtn.closest('.modal').classList.add('hidden');
-        });
+        closeBtn.addEventListener('click', () => _chiudiFinestra(closeBtn.closest('.modal')));
     }
     for (const backdrop of $$('.modal-backdrop')) {
-        backdrop.addEventListener('click', () => {
-            backdrop.closest('.modal').classList.add('hidden');
-        });
+        backdrop.addEventListener('click', () => _chiudiFinestra(backdrop.closest('.modal')));
     }
 }
 
+/**
+ * Chiude una finestra chiedendo conferma se contiene qualcosa di compilato.
+ *
+ * Prima il click sul fondo scuro chiudeva e basta: si compilava un'allocazione,
+ * si toccava fuori per sbaglio, e si ricominciava da capo. Il contrassegno viene
+ * messo al primo inserimento e tolto alla riapertura, quindi la conferma non
+ * compare mai su una finestra lasciata intatta.
+ */
+function _chiudiFinestra(modale) {
+    if (!modale) return;
+    if (modale.dataset.compilata === '1' &&
+        !confirm('Chiudere senza salvare?\n\nQuello che hai inserito andrà perso.')) {
+        return;
+    }
+    delete modale.dataset.compilata;
+    modale.classList.add('hidden');
+}
+
+/**
+ * Esc chiude, Invio conferma. Prima non esisteva nessuna delle due:
+ * l'unico gestore da tastiera dell'app era quello dello zoom.
+ */
+function _setupTastieraFinestre() {
+    const finestraInCima = () => {
+        const aperte = $$('.modal:not(.hidden)');
+        return aperte.length ? aperte[aperte.length - 1] : null;
+    };
+
+    // Il contrassegno "compilata" nasce al primo inserimento dell'utente
+    document.addEventListener('input', (e) => {
+        const m = e.target?.closest?.('.modal');
+        if (m) m.dataset.compilata = '1';
+    }, true);
+
+    // ...e viene tolto quando la finestra si riapre, così non resta appiccicato
+    const osservatore = new MutationObserver((mutazioni) => {
+        for (const mut of mutazioni) {
+            const m = mut.target;
+            if (m instanceof HTMLElement && !m.classList.contains('hidden')) {
+                delete m.dataset.compilata;
+            }
+        }
+    });
+    for (const m of $$('.modal')) {
+        osservatore.observe(m, { attributes: true, attributeFilter: ['class'] });
+    }
+
+    document.addEventListener('keydown', (e) => {
+        const modale = finestraInCima();
+        if (!modale) return;
+
+        if (e.key === 'Escape') {
+            e.preventDefault();
+            _chiudiFinestra(modale);
+            return;
+        }
+
+        if (e.key === 'Enter') {
+            // In un'area di testo Invio va a capo, non conferma
+            if (e.target instanceof HTMLTextAreaElement) return;
+            // Se il fuoco è già su un pulsante o un link, decide lui
+            if (e.target instanceof HTMLButtonElement || e.target instanceof HTMLAnchorElement) return;
+            // Solo un pulsante dichiarato come principale, e solo se attivo
+            const primario = modale.querySelector('button.btn-primary:not([disabled])');
+            if (primario) {
+                e.preventDefault();
+                primario.click();
+            }
+        }
+    });
+}
+
 function openModal(id) { $(`#${id}`).classList.remove('hidden'); }
-function closeModal(id) { $(`#${id}`).classList.add('hidden'); }
+function closeModal(id) {
+    const m = $(`#${id}`);
+    if (!m) return;
+    delete m.dataset.compilata;   // chiusura programmatica: nessuna conferma
+    m.classList.add('hidden');
+}
 
 function renderCompareCharts(results) {
     // Switch to dashboard tab
