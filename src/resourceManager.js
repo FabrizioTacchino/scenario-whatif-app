@@ -367,25 +367,50 @@ export function deleteAllocazioniScenario(scenarioId) {
 
 /**
  * Aggiorna il codice commessa in tutte le allocazioni.
- * Restituisce il numero di allocazioni modificate.
+ * Restituisce { allocazioni, ids } oppure { errore }.
+ *
+ * Il campo `updatedAt` NON è anagrafica, è la protezione: _pullIfNewer decide
+ * riga per riga confrontando i timestamp (syncManager.js), senza consultare il
+ * registro delle modifiche. Poiché ogni push scrive un updated_at fresco lato
+ * cloud, un'allocazione rinominata ma con updatedAt vecchio risulta più
+ * "vecchia" della copia remota e viene riportata al codice precedente, una alla
+ * volta e in silenzio. Toccando updatedAt la riga locale vince.
  */
 export function renameCommessaCodice(oldCodice, newCodice) {
-    if (!oldCodice || !newCodice || oldCodice === newCodice) return 0;
+    if (!oldCodice || !newCodice || oldCodice === newCodice) {
+        return { allocazioni: 0, ids: [] };
+    }
     const all = listAllocazioni();
-    let count = 0;
+
+    // Prima passata, di sola lettura. L'errore è solo quando esistono allocazioni
+    // su ENTRAMBI i codici: fonderle non è reversibile. Se esistono solo sul
+    // codice nuovo la rinomina è già avvenuta — capita rilanciandola dopo
+    // un'interruzione — e va lasciata passare senza toccare niente.
+    const suVecchio = all.some(a => a.codiceCommessa === oldCodice);
+    const suNuovo = all.some(a => a.codiceCommessa === newCodice);
+    if (suVecchio && suNuovo) {
+        return { errore: `Esistono allocazioni sia su ${oldCodice} sia su ${newCodice}: `
+                       + 'unire due commesse non è un\'operazione reversibile.' };
+    }
+
+    const adesso = new Date().toISOString();
     const toccate = [];
     for (const a of all) {
         if (a.codiceCommessa === oldCodice) {
             a.codiceCommessa = newCodice;
+            a.updatedAt = adesso;
             toccate.push(a.id);
-            count++;
         }
     }
-    if (count > 0) {
-        safeSetItem(ALLOCAZIONI_KEY, JSON.stringify(all));
+    if (toccate.length > 0) {
+        if (!safeSetItem(ALLOCAZIONI_KEY, JSON.stringify(all))) {
+            return { errore: 'Spazio esaurito: le allocazioni non sono state salvate.' };
+        }
         trackChanges('allocazione', toccate);
+        // whatif_audit è sincronizzata: la traccia arriva anche agli altri
+        _audit('commessa', oldCodice, 'rinomina_codice', oldCodice, newCodice, 'manuale');
     }
-    return count;
+    return { allocazioni: toccate.length, ids: toccate };
 }
 
 // ─── VALIDATION ──────────────────────────────────────────────

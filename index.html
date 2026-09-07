@@ -1434,8 +1434,9 @@
       </div>
       <div class="modal-body">
         <p class="text-muted" style="margin-bottom:16px;font-size:13px;">
-          Aggiorna codice e/o nome della commessa. Tutte le allocazioni e gli input di scenario
-          verranno aggiornati automaticamente.
+          Aggiorna codice e/o nome della commessa. Vengono riscritti la baseline, le allocazioni
+          e, in ogni scenario, gli input, i dati importati, i costi inseriti a mano e le
+          fotografie degli scenari bloccati. Il riepilogo qui sotto dice esattamente quanto.
         </p>
         <div class="res-form-section-label">Valori attuali</div>
         <div class="res-form-grid" style="margin-bottom:16px;">
@@ -1451,7 +1452,8 @@
           <label>Nuovo nome *</label>
           <input type="text" id="res-rename-new-nome" class="res-input" placeholder="es. Studentato Padova" />
         </div>
-        <p id="res-rename-error" style="color:var(--danger);font-size:13px;margin-top:8px;"></p>
+        <div id="res-rename-preview" style="margin-top:16px;font-size:13px;"></div>
+        <p id="res-rename-error" style="color:var(--danger);font-size:13px;margin-top:8px;white-space:pre-line;"></p>
         <div style="display:flex;gap:8px;margin-top:20px;">
           <button id="btn-res-rename-confirm" class="btn btn-primary" style="flex:1;">Rinomina</button>
           <button class="btn btn-ghost" style="flex:1;" id="res-rename-commessa-cancel">Annulla</button>

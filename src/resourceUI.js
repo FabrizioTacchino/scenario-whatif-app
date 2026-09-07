@@ -1204,7 +1204,7 @@ function _renderCommessaDetail(scenarioId, commesse, selectedCommesse = [], date
                             ${commessa.tipo ? `<span class="res-badge tipo-${(commessa.tipo||'').toLowerCase().replace(' ','-')}">${commessa.tipo}</span>` : ''}
                             ${commessa.probabilita !== undefined ? `<span class="text-muted">Prob: ${commessa.probabilita}%</span>` : ''}
                             <button class="btn btn-ghost btn-xs res-btn-rename-commessa"
-                                data-codice="${commessa.codice}" data-nome="${commessa.nome}"
+                                data-codice="${_esc(commessa.codice)}" data-nome="${_esc(commessa.nome)}"
                                 title="Rinomina codice/nome commessa">✏ Rinomina</button>
                         </div>
                     </div>
@@ -1325,7 +1325,22 @@ function _renderCommessaDetail(scenarioId, commesse, selectedCommesse = [], date
     });
 }
 
+/**
+ * Neutralizza i caratteri che romperebbero un attributo HTML.
+ * Nomi e codici commessa arrivano da un file Excel e dal cloud condiviso con
+ * altre cinque persone: un apice doppio spezza l'attributo, e il resto della
+ * stringa finirebbe interpretato come marcatura.
+ */
+function _esc(s) {
+    if (s == null) return '';
+    return String(s).replace(/[&<>"']/g, (c) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    })[c]);
+}
+
 // ─── RINOMINA COMMESSA MODAL ──────────────────────────────────
+
+let _timerAnteprimaRinomina = null;
 
 function _openRenameCommessaModal(codice, nome) {
     $('#res-rename-old-codice').value = codice;
@@ -1334,28 +1349,115 @@ function _openRenameCommessaModal(codice, nome) {
     $('#res-rename-new-nome').value = nome;
     $('#res-rename-error').textContent = '';
     document.getElementById('res-rename-commessa-modal').classList.remove('hidden');
+    _aggiornaAnteprimaRinomina();
     $('#res-rename-new-codice').focus();
     $('#res-rename-new-codice').select();
 }
 
-function _saveRenameCommessa() {
+/**
+ * Mostra cosa verra' toccato e perche' eventualmente non si puo' procedere.
+ * Il pulsante resta spento finche' una guardia blocca: e' l'unico modo per non
+ * scoprire a meta' operazione che il ruolo non basta o che il codice e' occupato.
+ */
+function _aggiornaAnteprimaRinomina() {
+    const box = $('#res-rename-preview');
+    const bottone = $('#btn-res-rename-confirm');
+    if (!box || !_ctx.anteprimaRinomina) return;
+
+    const a = _ctx.anteprimaRinomina(
+        $('#res-rename-old-codice').value.trim(), $('#res-rename-old-nome').value.trim(),
+        $('#res-rename-new-codice').value.trim(), $('#res-rename-new-nome').value.trim());
+
+    box.textContent = '';
+
+    if (a.blocchi.length) {
+        const ko = document.createElement('div');
+        ko.style.cssText = 'color:var(--danger);white-space:pre-line;';
+        ko.textContent = 'Non si puo\' procedere:\n\u2022 ' + a.blocchi.join('\n\u2022 ');
+        box.appendChild(ko);
+        bottone.disabled = true;
+        bottone.textContent = 'Rinomina';
+        return;
+    }
+
+    const righe = [];
+    righe.push(a.baseline
+        ? `Baseline: presente, ${a.baseline.mesi} mesi di curva`
+        : 'Baseline: la commessa non c\'e\' (esiste solo negli scenari)');
+    righe.push(`Allocazioni: ${a.allocazioni} su ${a.persone} persone`
+             + (a.conAggancio ? ` \u2014 ${a.conAggancio} con agganci data attivi` : ''));
+    righe.push(`Scenari: ${a.scenari.scenari} toccati`
+             + ` (${a.scenari.costi} con costi, ${a.scenari.vociCosto} voci di categoria)`);
+    if (a.scenari.bloccati.length) {
+        righe.push(`Bloccati, rinominati comunque: ${a.scenari.bloccati.join(', ')}`);
+    }
+
+    const ok = document.createElement('div');
+    ok.style.cssText = 'background:var(--bg-secondary);border-radius:6px;padding:10px 12px;line-height:1.7;';
+    for (const r of righe) {
+        const d = document.createElement('div');
+        d.textContent = r;
+        ok.appendChild(d);
+    }
+    const nota = document.createElement('div');
+    nota.style.cssText = 'margin-top:8px;color:var(--text-muted);font-size:12px;';
+    nota.textContent = 'Esporta un backup completo prima di procedere (Export \u2192 Backup).';
+    ok.appendChild(nota);
+    box.appendChild(ok);
+
+    bottone.disabled = false;
+    bottone.textContent = `Rinomina \u2014 ${a.allocazioni} allocazioni, ${a.scenari.scenari} scenari`
+                        + (a.scenari.vociCosto ? `, ${a.scenari.vociCosto} voci di costo` : '');
+}
+
+async function _saveRenameCommessa() {
     const oldCodice = $('#res-rename-old-codice').value.trim();
     const oldNome   = $('#res-rename-old-nome').value.trim();
     const newCodice = $('#res-rename-new-codice').value.trim();
     const newNome   = $('#res-rename-new-nome').value.trim();
     const errEl = $('#res-rename-error');
+    const bottone = $('#btn-res-rename-confirm');
 
-    if (!newCodice) { errEl.textContent = 'Il nuovo codice è obbligatorio'; return; }
-    if (!newNome)   { errEl.textContent = 'Il nuovo nome è obbligatorio'; return; }
-    if (newCodice === oldCodice && newNome === oldNome) {
-        errEl.textContent = 'Nessuna modifica rilevata';
+    errEl.textContent = '';
+    const etichetta = bottone.textContent;
+    bottone.disabled = true;
+    bottone.textContent = 'Rinomina in corso\u2026';
+
+    let esito;
+    try {
+        esito = await _ctx.renameCommessa(oldCodice, oldNome, newCodice, newNome);
+    } catch (err) {
+        esito = { errore: err?.message || String(err) };
+    }
+
+    // In caso di errore la finestra NON si chiude: i valori restano dove sono
+    // e si puo' correggere senza ricominciare.
+    if (esito?.errore) {
+        errEl.textContent = esito.errore;
+        bottone.disabled = false;
+        bottone.textContent = etichetta;
         return;
     }
 
-    const { allocCount, scenCount } = _ctx.renameCommessa(oldCodice, oldNome, newCodice, newNome);
     document.getElementById('res-rename-commessa-modal').classList.add('hidden');
+    bottone.disabled = false;
+    bottone.textContent = etichetta;
 
-    const msg = `Rinomina completata: ${allocCount} allocazion${allocCount === 1 ? 'e' : 'i'} e ${scenCount} scenar${scenCount === 1 ? 'io' : 'i'} aggiornati.`;
+    const parti = [
+        `${esito.allocazioni} allocazion${esito.allocazioni === 1 ? 'e' : 'i'}`,
+        `${esito.scenari} scenar${esito.scenari === 1 ? 'io' : 'i'}`,
+    ];
+    if (esito.vociCosto) parti.push(`${esito.vociCosto} voci di costo`);
+    if (esito.baseline) parti.push('baseline');
+
+    let msg = `Rinomina completata: ${parti.join(', ')}.`;
+    if (esito.bloccati?.length) {
+        msg += `\n\nScenari bloccati aggiornati: ${esito.bloccati.join(', ')}.`;
+    }
+    if (esito.nonInviati?.length) {
+        msg += `\n\nATTENZIONE \u2014 non inviato al cloud: ${esito.nonInviati.join('; ')}.`
+             + '\nRiprova con "Sincronizza adesso" prima di chiudere l\'app.';
+    }
     alert(msg);
     _renderSubTab('commesse');
 }
@@ -3259,7 +3361,13 @@ function _setupModals() {
     // Rinomina commessa modal
     $('#res-rename-commessa-close')?.addEventListener('click', () => _closeModal('res-rename-commessa-modal'));
     $('#res-rename-commessa-cancel')?.addEventListener('click', () => _closeModal('res-rename-commessa-modal'));
-    $('#btn-res-rename-confirm')?.addEventListener('click', _saveRenameCommessa);
+    $('#btn-res-rename-confirm')?.addEventListener('click', () => { _saveRenameCommessa(); });
+    for (const id of ['#res-rename-new-codice', '#res-rename-new-nome']) {
+        $(id)?.addEventListener('input', () => {
+            clearTimeout(_timerAnteprimaRinomina);
+            _timerAnteprimaRinomina = setTimeout(_aggiornaAnteprimaRinomina, 250);
+        });
+    }
 }
 
 function _downloadImportTemplate() {

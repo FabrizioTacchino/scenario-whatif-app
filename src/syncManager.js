@@ -2260,6 +2260,38 @@ export async function pushAllocazioniNow() {
     safeSetItem(LAST_SYNC_KEY, serverNow);
 }
 
+/**
+ * Invio immediato di baseline e scenari, per operazioni che non tollerano la
+ * latenza del ciclo periodico. Stessa forma di pushAllocazioniNow.
+ *
+ * La baseline è il deposito più esposto: non ha tracciamento delle modifiche e
+ * _pullBaseline la sovrascrive senza fondere. Finché la copia cloud non
+ * contiene la modifica, qualunque scaricamento la annulla.
+ *
+ * L'aggiornamento di _hashes non è un'ottimizzazione: senza, il ciclo vede
+ * l'hash cambiato e rilancia _pushEntity, che passa da _detectConflict — e quel
+ * ramo scarica PRIMA di inviare, riportando indietro proprio ciò che si è
+ * appena scritto.
+ */
+async function _pushSubitoChiave(chiave, spedisci) {
+    if (_pushBlocked) throw new Error('Versione dell\'app troppo vecchia. Aggiorna per poter modificare i dati.');
+    if (!canWrite(chiave)) throw new Error(`Il tuo ruolo non può modificare ${chiave}.`);
+    if (!navigator.onLine) throw new Error('Offline: impossibile sincronizzare.');
+    const session = await getSession();
+    if (!session) throw new Error('Not authenticated');
+    await spedisci(session.user.id);
+    _hashes[chiave] = _hashString(localStorage.getItem(chiave) || '');
+    safeSetItem(LAST_SYNC_KEY, await _getServerTime());
+}
+
+export function pushBaselineNow() {
+    return _pushSubitoChiave('whatif_baseline', (uid) => _pushBaseline(uid));
+}
+
+export function pushScenariNow() {
+    return _pushSubitoChiave('whatif_scenarios', (uid) => _pushScenarios(uid));
+}
+
 function _backupLocal() {
     const backup = {};
     for (const key of SYNC_KEYS) {

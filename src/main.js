@@ -9,6 +9,7 @@ import {
     listScenarios, getScenario, createScenario, duplicateScenario,
     updateScenario, updateScenarioInput, deleteScenario,
     saveBaseline, loadBaseline, clearBaseline, renameCommessaKey,
+    renameCommessaInBaseline, contaRinominaCommessa,
     lockScenario, unlockScenario, setScenarioDraft,
 } from './scenarioManager.js';
 import { exportToExcel, exportToCSV, exportToTemplate, exportChartToExcel } from './exportManager.js';
@@ -16,10 +17,11 @@ import { initResourceModule, renderResourceTab, onScenarioDuplicated } from './r
 import { renameCommessaCodice, listPersone, listAllocazioni, deleteAllocazioniScenario } from './resourceManager.js';
 import { safeSetItem, trackChanges, onStorageError, getStorageUsage } from './storage.js';
 import * as notify from './notify.js';
+import { registraRinomina, rilevaCodiciSuperati, pushRinomineToCloud, pullRinomineFromCloud } from './commesseRinominate.js';
 import { computeResourceMatrix, computeResourceKpis } from './resourceEngine.js';
 import { generateReport } from './reportGenerator.js';
 import { supabase, signIn, signUp, signOut, getSession, onAuthStateChange, getUserRole, listUsers, updateUserRole } from './supabaseClient.js';
-import { initSync, stopSync, sincronizzaAdesso, getSyncStatus, onSyncStatusChange, trackDeletion, getCurrentRole, canWrite, fetchAllScenariosFromCloud, pushScenarioApproval, pushScenarioDelete, pushSingleScenario, pushScenarioRestore, onPresenceChange, getOnlineUsers, deleteAllocazioniScenarioCloud, purgeScenarioCloud } from './syncManager.js';
+import { initSync, stopSync, sincronizzaAdesso, getSyncStatus, onSyncStatusChange, trackDeletion, getCurrentRole, canWrite, fetchAllScenariosFromCloud, pushScenarioApproval, pushScenarioDelete, pushSingleScenario, pushScenarioRestore, onPresenceChange, getOnlineUsers, deleteAllocazioniScenarioCloud, purgeScenarioCloud, pushBaselineNow, pushScenariNow, pushAllocazioniNow } from './syncManager.js';
 import { Chart, registerables } from 'chart.js';
 import ChartDataLabels from 'chartjs-plugin-datalabels';
 
@@ -104,6 +106,9 @@ function _applicaEsitoSync(result) {
                       { dettaglio: result.errore });
     } else {
         updateCloudIndicator('connected');
+        // Lo storico rinomine serve anche a chi non ha eseguito la rinomina:
+        // e' lui che potrebbe ricaricare un file AOP rimasto indietro.
+        pullRinomineFromCloud().catch(() => { /* best effort */ });
     }
 }
 
@@ -356,13 +361,10 @@ document.addEventListener('DOMContentLoaded', async () => {
             to:   document.getElementById('filter-date-to')?.value   || null,
         }),
         getActiveFilters: () => getActiveFilters(),
-        renameCommessa: (oldCodice, oldNome, newCodice, newNome) => {
-            const allocCount = renameCommessaCodice(oldCodice, newCodice);
-            const oldKey = `${oldCodice}|||${oldNome}`;
-            const newKey = `${newCodice}|||${newNome}`;
-            const scenCount = renameCommessaKey(oldKey, newKey);
-            return { allocCount, scenCount };
-        },
+        anteprimaRinomina: (oldCodice, oldNome, newCodice, newNome) =>
+            _anteprimaRinominaCommessa(oldCodice, oldNome, newCodice, newNome),
+        renameCommessa: (oldCodice, oldNome, newCodice, newNome) =>
+            _eseguiRinominaCommessa(oldCodice, oldNome, newCodice, newNome),
     });
 
     await checkAndInitLicense();
@@ -434,6 +436,10 @@ function afterLicenseValid(licenseResult) {
         $('#upload-overlay').classList.add('hidden');
         $('#app').classList.remove('hidden');
         initApp();
+        // Va qui e non nella sequenza di avvio: per completare una rinomina
+        // interrotta serve appData, che prima di questo punto è ancora null.
+        try { _controllaRinominaInterrotta(); }
+        catch (err) { notify.registra('errore', 'avvio', 'Controllo rinomina fallito', String(err)); }
     } else {
         $('#upload-overlay').classList.remove('hidden');
     }
@@ -1106,6 +1112,41 @@ async function handleFile(file) {
         txt.textContent = 'Parsing dati...';
 
         appData = parseExcel(buf);
+
+        // Il file potrebbe essere una versione precedente alla rinomina di una
+        // commessa: caricarlo così com'è farebbe rientrare il codice vecchio
+        // come commessa nuova, lasciando quella rinominata senza dati.
+        const superati = rilevaCodiciSuperati(appData.commesse);
+        if (superati.length) {
+            const elenco = superati
+                .map(v => `  • ${v.codiceNelFile} → ${v.codiceAttuale}  (${v.nomeAttuale})`)
+                .join('\n');
+            const scelta = confirm(
+                `Questo file contiene ${superati.length} commess${superati.length === 1 ? 'a' : 'e'} `
+                + 'con un codice che era stato rinominato:\n\n' + elenco
+                + '\n\nOK  = applica le rinomine al file mentre lo carico (consigliato)'
+                + '\nAnnulla = carica il file così com\'è, con i codici vecchi');
+            if (scelta) {
+                const falliti = [];
+                let applicati = 0;
+                for (const v of superati) {
+                    const vecchiaKey = `${v.codiceNelFile}|||${v.nomeNelFile}`;
+                    const nuovaKey = `${v.codiceAttuale}|||${v.nomeNelFile}`;
+                    const esito = renameCommessaInBaseline(
+                        appData, vecchiaKey, nuovaKey, v.codiceAttuale, v.nomeNelFile);
+                    if (esito.errore) falliti.push(`${v.codiceNelFile}: ${esito.errore}`);
+                    else if (esito.trovata) applicati++;
+                }
+                if (applicati) {
+                    notify.successo(`${applicati} codice/i aggiornato/i durante il caricamento.`);
+                }
+                if (falliti.length) {
+                    notify.errore('Alcuni codici non sono stati aggiornati.',
+                                  { dettaglio: falliti.join(' | ') });
+                }
+            }
+        }
+
         saveBaseline(appData);
         _invalidaCacheDate(); // baseline nuova: tutte le date vanno ricalcolate
         fill.style.width = '90%';
@@ -4711,6 +4752,276 @@ function renderCompareKPIs(results, baselineKpis) {
     });
 
     row.innerHTML = html;
+}
+
+// ============================================================
+//  RINOMINA COMMESSA
+// ============================================================
+//
+// Cambiare il codice di una commessa tocca tre depositi indipendenti:
+// whatif_baseline (commesse[] e monthlyData, indicizzati per `codice|||nome`),
+// whatif_scenarios (cinque strutture per chiave dentro ogni scenario) e
+// whatif_allocazioni (campo codiceCommessa, il solo codice senza nome).
+// Aggiornarne uno e non gli altri lascia le allocazioni orfane: gli agganci
+// data si spengono in silenzio e la probabilita' torna a 1, cambiando i costi.
+//
+// Non esiste un annullamento sensato: con piu' persone collegate un push puo'
+// partire in qualsiasi momento e riportare indietro meta' del lavoro. La
+// proprieta' su cui si costruisce e' un'altra, ed e' vera per costruzione:
+// ogni passo e' idempotente. Rieseguito su dati gia' rinominati non trova
+// nulla da fare. Quindi il recupero da un fallimento a meta' e' "rilancia",
+// non "annulla" — ed e' il senso del giornale qui sotto.
+
+const RINOMINA_JOURNAL_KEY = 'whatif_rename_journal';
+// Il limite misurato di localStorage in Chromium e' ~50 MB; oggi l'app ne usa
+// ~5,5. Sopra questa soglia un salvataggio puo' fallire a meta' operazione.
+const RINOMINA_SOGLIA_MB = 40;
+
+function _chiaveCommessa(codice, nome) {
+    return `${codice || ''}|||${nome || ''}`;
+}
+
+/**
+ * Raccoglie tutto quello che serve sapere PRIMA di scrivere: i conteggi da
+ * mostrare e l'esito di ogni guardia. Non modifica niente.
+ */
+function _anteprimaRinominaCommessa(oldCodice, oldNome, newCodice, newNome) {
+    const oldKey = _chiaveCommessa(oldCodice, oldNome);
+    const newKey = _chiaveCommessa(newCodice, newNome);
+    const blocchi = [];
+
+    // ── Guardie ──
+    if (!newCodice || !newNome) {
+        blocchi.push('Codice e nome nuovi sono obbligatori.');
+    }
+    if (oldKey === newKey) {
+        blocchi.push('Nessuna modifica: codice e nome sono identici a prima.');
+    }
+    if (/\|/.test(newCodice) || /\|/.test(newNome)) {
+        // La chiave commessa e' `codice|||nome` e la cache date usa `codice|scenario`:
+        // una barra verticale renderebbe le chiavi ambigue in modo irreversibile.
+        blocchi.push('Il carattere "|" non e\' ammesso: e\' il separatore interno delle chiavi.');
+    }
+
+    for (const chiave of ['whatif_baseline', 'whatif_scenarios', 'whatif_allocazioni']) {
+        if (!canWrite(chiave)) {
+            blocchi.push(`Il tuo ruolo (${getCurrentRole() || '?'}) non puo' modificare `
+                       + `${chiave.replace('whatif_', '')}: la rinomina resterebbe a meta'.`);
+        }
+    }
+    if (getSyncStatus()?.pushBlocked) {
+        blocchi.push('Questa versione dell\'app non puo\' inviare dati al cloud: '
+                   + 'la rinomina verrebbe annullata al primo scaricamento. Aggiorna l\'app.');
+    }
+
+    const altri = getOnlineUsers();
+    if (altri.length > 0) {
+        const nomi = altri.map(u => String(u.email || '?').split('@')[0]).join(', ');
+        blocchi.push(`Ci sono altre persone collegate (${nomi}). `
+                   + 'La baseline non e\' protetta dalla sovrascrittura: aspetta che escano.');
+    }
+
+    const spazio = getStorageUsage();
+    if (spazio && Number(spazio.megabytes) >= RINOMINA_SOGLIA_MB) {
+        blocchi.push(`Spazio locale occupato: ${spazio.megabytes} MB. `
+                   + 'Un salvataggio potrebbe fallire a meta\' operazione.');
+    }
+
+    // ── Cosa esiste, di partenza ──
+    const tuttiScenari = listScenarios();
+    const tutteAlloc = listAllocazioni();
+    const commBase = (appData?.commesse || []).find(c => c.key === oldKey);
+    const alloc = tutteAlloc.filter(a => a.codiceCommessa === oldCodice);
+    const scen = contaRinominaCommessa(oldKey);
+    const inNewCommesse = tuttiScenari.some(sc =>
+        Array.isArray(sc.newCommesse) && sc.newCommesse.some(c => c.key === oldKey));
+
+    // ── Il codice di destinazione: chi lo occupa? ──
+    // Blocca solo se la sorgente esiste ANCORA nello stesso deposito: allora
+    // rinominare fonderebbe due commesse distinte. Se la sorgente non c'e' piu',
+    // l'occupante e' la commessa stessa gia' rinominata, e ripetere e' innocuo
+    // — anzi e' esattamente cio' che serve per completare una rinomina
+    // interrotta a meta'.
+    const usaChiave = (sc, k) =>
+        sc.inputs?.[k] !== undefined || sc.importedData?.[k] !== undefined ||
+        sc.costi?.[k] !== undefined || sc.costiSnapshot?.[k] !== undefined ||
+        (Array.isArray(sc.newCommesse) && sc.newCommesse.some(c => c.key === k));
+
+    const altraInBase = (appData?.commesse || []).find(c =>
+        (c.key === newKey || c.codice === newCodice) && c !== commBase);
+    const scenDoppio = tuttiScenari.find(sc => usaChiave(sc, oldKey) && usaChiave(sc, newKey));
+    const allocDoppie = alloc.length > 0 && tutteAlloc.some(a => a.codiceCommessa === newCodice);
+
+    if (commBase && altraInBase) {
+        blocchi.push(`Il codice ${newCodice} e' gia' di un'altra commessa in baseline `
+                   + `("${altraInBase.nome}").`);
+    }
+    if (allocDoppie) blocchi.push(`Esistono allocazioni sia su ${oldCodice} sia su ${newCodice}.`);
+    if (scenDoppio) {
+        blocchi.push(`Lo scenario "${scenDoppio.name || scenDoppio.id}" contiene entrambe le commesse.`);
+    }
+
+    // Niente da nessuna parte: o il codice e' sbagliato, o la rinomina e' gia' completa
+    const giaFatta = !commBase && !alloc.length && !scen.scenari && !inNewCommesse
+        && ((appData?.commesse || []).some(c => c.codice === newCodice)
+            || tutteAlloc.some(a => a.codiceCommessa === newCodice));
+    if (!commBase && !alloc.length && !scen.scenari && !inNewCommesse) {
+        blocchi.push(giaFatta
+            ? `La commessa risulta gia' rinominata in ${newCodice}: non c'e' altro da fare.`
+            : `Commessa "${oldCodice}" non trovata: niente da rinominare.`);
+    }
+
+    return {
+        oldKey, newKey, blocchi,
+        baseline: commBase ? {
+            mesi: (appData?.monthlyData instanceof Map ? appData.monthlyData.get(oldKey) : null)?.length || 0,
+            probabilita: commBase.probabilitaAOP,
+            margine: commBase.margineAOP,
+        } : null,
+        allocazioni: alloc.length,
+        persone: new Set(alloc.map(a => a.personaId)).size,
+        conAggancio: alloc.filter(a => a.aggancioInizio || a.aggancioFine).length,
+        scenari: scen,
+        altriCollegati: altri.length,
+    };
+}
+
+function _scriviJournal(dati) {
+    safeSetItem(RINOMINA_JOURNAL_KEY, JSON.stringify(dati));
+}
+
+/**
+ * Esegue la rinomina. Restituisce { errore } oppure il rapporto completo.
+ *
+ * Ordine di scrittura: scenari, baseline, allocazioni. Gli scenari sono il
+ * blocco piu' grosso e quindi il candidato piu' probabile a un fallimento per
+ * spazio esaurito: farli per primi significa che se saltano, gli altri due
+ * depositi non sono ancora stati toccati e lo stato resta coerente.
+ *
+ * Ordine di invio al cloud: baseline, scenari, allocazioni — l'opposto. La
+ * baseline per prima perche' e' l'unico deposito senza alcuna protezione:
+ * finche' la copia remota non contiene la modifica, ogni scaricamento la annulla.
+ */
+async function _eseguiRinominaCommessa(oldCodice, oldNome, newCodice, newNome) {
+    // Rivalidazione: fra l'anteprima e la conferma puo' essere arrivato un pull
+    // o essersi collegato qualcuno.
+    const pre = _anteprimaRinominaCommessa(oldCodice, oldNome, newCodice, newNome);
+    if (pre.blocchi.length) return { errore: pre.blocchi.join('\n') };
+
+    const { oldKey, newKey } = pre;
+    const journal = {
+        quando: new Date().toISOString(),
+        oldCodice, oldNome, newCodice, newNome, fase: 'iniziata',
+    };
+    _scriviJournal(journal);
+
+    // ── Scritture locali, senza await in mezzo ──
+    const esitoScen = renameCommessaKey(oldKey, newKey, newCodice, newNome);
+    if (esitoScen.errore) return { errore: esitoScen.errore };
+    journal.fase = 'scenari'; _scriviJournal(journal);
+
+    const esitoBase = renameCommessaInBaseline(appData, oldKey, newKey, newCodice, newNome);
+    if (esitoBase.errore) {
+        return { errore: esitoBase.errore + '\n\nGli scenari sono gia' + "'" + ' stati rinominati: '
+                       + 'usa "Completa la rinomina" per riprovare.' };
+    }
+    if (esitoBase.trovata && !esitoBase.scritta) {
+        return { errore: 'Spazio esaurito: la baseline non e' + "'" + ' stata salvata. '
+                       + 'Libera spazio e usa "Completa la rinomina".' };
+    }
+    journal.fase = 'baseline'; _scriviJournal(journal);
+
+    const esitoAlloc = renameCommessaCodice(oldCodice, newCodice);
+    if (esitoAlloc.errore) return { errore: esitoAlloc.errore };
+    journal.fase = 'allocazioni'; _scriviJournal(journal);
+
+    // ── Interfaccia: la cache date e' indicizzata per codice e va invalidata
+    //    a mano, perche' la rinomina in baseline non emette alcun evento.
+    _invalidaCacheDate();
+    try {
+        populateFilters();
+        refreshDashboard();
+        renderAssumptionsTable();
+    } catch (err) {
+        notify.registra('avviso', 'rinomina', 'Aggiornamento vista non riuscito', String(err));
+    }
+
+    // ── Invio al cloud, ciascuno per conto suo ──
+    const nonInviati = [];
+    for (const [etichetta, invia] of [
+        ['baseline', pushBaselineNow],
+        ['scenari', pushScenariNow],
+        ['allocazioni', pushAllocazioniNow],
+    ]) {
+        try { await invia(); }
+        catch (err) { nonInviati.push(`${etichetta} (${err.message})`); }
+    }
+
+    localStorage.removeItem(RINOMINA_JOURNAL_KEY);
+
+    // Lo storico serve a riconoscere, fra mesi, un file AOP rimasto indietro.
+    registraRinomina({ oldCodice, oldNome, newCodice, newNome, chi: _currentUserEmail || '' });
+    pushRinomineToCloud().catch(() => { /* best effort: non blocca la rinomina */ });
+
+    _avviaControlloRinomina(oldCodice, newCodice);
+
+    return {
+        allocazioni: esitoAlloc.allocazioni,
+        scenari: esitoScen.scenari,
+        vociCosto: esitoScen.vociCosto,
+        bloccati: esitoScen.bloccati,
+        baseline: esitoBase.trovata,
+        nonInviati,
+    };
+}
+
+/**
+ * Vent'anni dopo — cioe' venti secondi, due giri del ciclo periodico — ricontrolla
+ * che la baseline contenga ancora il codice nuovo. Se non c'e' piu', un
+ * scaricamento ha annullato la rinomina: non lo si puo' impedire da qui, ma
+ * almeno non deve succedere in silenzio.
+ */
+function _avviaControlloRinomina(oldCodice, newCodice) {
+    setTimeout(() => {
+        const raw = localStorage.getItem('whatif_baseline') || '';
+        let commesse = [];
+        try { commesse = JSON.parse(raw).commesse || []; } catch { return; }
+        const ok = commesse.some(c => c.codice === newCodice);
+        const tornata = commesse.some(c => c.codice === oldCodice);
+        if (!ok || tornata) {
+            // gli avvisi di tipo errore non si chiudono da soli (durata 0)
+            notify.errore(
+                `La rinomina ${oldCodice} → ${newCodice} e' stata annullata da una `
+                + 'sincronizzazione. Rilanciala quando sei solo sull\'applicazione.');
+            notify.registra('errore', 'rinomina',
+                `Rinomina ${oldCodice} -> ${newCodice} annullata da un pull`, raw.slice(0, 200));
+        }
+    }, 20000);
+}
+
+/**
+ * All'avvio: se un giornale e' rimasto, la rinomina si e' interrotta a meta'.
+ * Ripeterla e' sicuro — ogni passo e' idempotente — quindi si offre di completarla.
+ */
+function _controllaRinominaInterrotta() {
+    let j = null;
+    try { j = JSON.parse(localStorage.getItem(RINOMINA_JOURNAL_KEY) || 'null'); }
+    catch { localStorage.removeItem(RINOMINA_JOURNAL_KEY); return; }
+    if (!j || !j.oldCodice) return;
+
+    const messaggio = `Una rinomina (${j.oldCodice} → ${j.newCodice}) si e' interrotta `
+                    + `alla fase "${j.fase}". I dati potrebbero essere disallineati.`;
+    notify.errore(messaggio);
+    notify.registra('errore', 'rinomina', messaggio, JSON.stringify(j));
+
+    if (confirm(messaggio + '\n\nVuoi completarla adesso? Ripeterla e\' sicuro.')) {
+        _eseguiRinominaCommessa(j.oldCodice, j.oldNome, j.newCodice, j.newNome)
+            .then(r => {
+                if (r.errore) alert('Non riuscita:\n\n' + r.errore);
+                else alert('Rinomina completata.');
+            })
+            .catch(err => alert('Non riuscita:\n\n' + err.message));
+    }
 }
 
 // ============================================================
