@@ -1203,9 +1203,6 @@ function _renderCommessaDetail(scenarioId, commesse, selectedCommesse = [], date
                         <div class="res-commessa-meta">
                             ${commessa.tipo ? `<span class="res-badge tipo-${(commessa.tipo||'').toLowerCase().replace(' ','-')}">${commessa.tipo}</span>` : ''}
                             ${commessa.probabilita !== undefined ? `<span class="text-muted">Prob: ${commessa.probabilita}%</span>` : ''}
-                            <button class="btn btn-ghost btn-xs res-btn-rename-commessa"
-                                data-codice="${_esc(commessa.codice)}" data-nome="${_esc(commessa.nome)}"
-                                title="Rinomina codice/nome commessa">✏ Rinomina</button>
                         </div>
                     </div>
                     <div class="res-kpi-row">
@@ -1317,12 +1314,6 @@ function _renderCommessaDetail(scenarioId, commesse, selectedCommesse = [], date
         });
     });
 
-    // Event delegation per bottoni Rinomina
-    panel.querySelectorAll('.res-btn-rename-commessa').forEach(btn => {
-        btn.addEventListener('click', () => {
-            _openRenameCommessaModal(btn.dataset.codice, btn.dataset.nome);
-        });
-    });
 }
 
 /**
@@ -1341,6 +1332,18 @@ function _esc(s) {
 // ─── RINOMINA COMMESSA MODAL ──────────────────────────────────
 
 let _timerAnteprimaRinomina = null;
+
+/**
+ * Apre la finestra di rinomina dall'esterno (pannello amministrazione).
+ *
+ * La rinomina non sta piu' sulla scheda della singola commessa: era un pulsante
+ * grigio ripetuto decine di volte, di fatto invisibile, e in un punto dove ci si
+ * capita per sbaglio. Tocca tutti i depositi insieme e vuole che nessun altro
+ * sia collegato: e' un'operazione di amministrazione, e sta con le altre.
+ */
+export function apriRinominaCommessa(codice, nome) {
+    _openRenameCommessaModal(codice, nome);
+}
 
 function _openRenameCommessaModal(codice, nome) {
     $('#res-rename-old-codice').value = codice;
@@ -1459,7 +1462,9 @@ async function _saveRenameCommessa() {
              + '\nRiprova con "Sincronizza adesso" prima di chiudere l\'app.';
     }
     alert(msg);
-    _renderSubTab('commesse');
+    // Si puo' arrivare qui dal pannello amministrazione, con la scheda Risorse
+    // nemmeno aperta: in quel caso non c'e' niente da ridisegnare.
+    if (_currentSubTab === 'commesse') _renderSubTab('commesse');
 }
 
 // ─── RILEVAMENTO ALLOCAZIONI SCOPERTE ────────────────────────

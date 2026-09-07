@@ -13,7 +13,7 @@ import {
     lockScenario, unlockScenario, setScenarioDraft,
 } from './scenarioManager.js';
 import { exportToExcel, exportToCSV, exportToTemplate, exportChartToExcel } from './exportManager.js';
-import { initResourceModule, renderResourceTab, onScenarioDuplicated } from './resourceUI.js';
+import { initResourceModule, renderResourceTab, onScenarioDuplicated, apriRinominaCommessa } from './resourceUI.js';
 import { renameCommessaCodice, listPersone, listAllocazioni, deleteAllocazioniScenario } from './resourceManager.js';
 import { safeSetItem, trackChanges, onStorageError, getStorageUsage } from './storage.js';
 import * as notify from './notify.js';
@@ -286,6 +286,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         ['licenza', setupLicenseScreen], ['banner aggiornamenti', setupUpdateBanner],
         ['download grafici', setupChartDownloads], ['confronto scenari', setupScenarioCompareTab],
         ['accesso cloud', setupCloudAuth],
+        ['rinomina commessa', _setupAdminRinomina],
     ];
     for (const [nome, fn] of _avvii) {
         try { fn(); }
@@ -675,6 +676,7 @@ function setupCloudAuth() {
                 $('#cloud-admin-panel')?.classList.remove('hidden');
                 _loadAdminUserList();
                 _loadMinVersion();
+                _caricaElencoRinomina();
             } else {
                 $('#cloud-admin-panel')?.classList.add('hidden');
             }
@@ -4884,6 +4886,52 @@ function _anteprimaRinominaCommessa(oldCodice, oldNome, newCodice, newNome) {
         scenari: scen,
         altriCollegati: altri.length,
     };
+}
+
+/**
+ * Riempie l'elenco delle commesse nel pannello amministrazione.
+ * Comprende quelle che vivono solo dentro uno scenario importato, altrimenti
+ * sarebbero le uniche a non poter essere rinominate.
+ */
+function _caricaElencoRinomina() {
+    const sel = $('#admin-rinomina-commessa');
+    if (!sel) return;
+
+    const viste = new Map();
+    for (const c of appData?.commesse || []) viste.set(c.key, c);
+    for (const scen of listScenarios()) {
+        for (const c of scen.newCommesse || []) if (!viste.has(c.key)) viste.set(c.key, c);
+    }
+
+    const elenco = [...viste.values()]
+        .sort((a, b) => String(a.codice || '').localeCompare(String(b.codice || '')));
+
+    sel.textContent = '';
+    if (!elenco.length) {
+        const opt = document.createElement('option');
+        opt.textContent = 'Nessuna commessa caricata';
+        opt.disabled = true;
+        sel.appendChild(opt);
+        return;
+    }
+    for (const c of elenco) {
+        const opt = document.createElement('option');
+        opt.value = c.key;
+        // textContent, non innerHTML: i nomi arrivano da un Excel e dal cloud
+        opt.textContent = `${c.codice} \u2014 ${c.nome}`;
+        sel.appendChild(opt);
+    }
+}
+
+function _setupAdminRinomina() {
+    $('#btn-admin-rinomina')?.addEventListener('click', () => {
+        const key = $('#admin-rinomina-commessa')?.value;
+        if (!key) return;
+        const [codice, nome] = key.split('|||');
+        // La finestra del cloud va chiusa: quella di rinomina le si aprirebbe sopra
+        closeModal('cloud-auth-modal');
+        apriRinominaCommessa(codice, nome);
+    });
 }
 
 function _scriviJournal(dati) {
