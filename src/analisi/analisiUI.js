@@ -501,6 +501,16 @@ function attachListeners() {
         if (isAnalisiTabActive()) scheduleRender();
     });
 
+    // Filtro probabilità. Due listener a sé e non un'aggiunta alla stringa
+    // delegata qui sotto: quella riguarda i chip, e un input numerico non è un
+    // chip. Toccarla sarebbe il modo più facile di rompere ciò che già funziona.
+    $('#filter-prob-from')?.addEventListener('change', () => {
+        if (isAnalisiTabActive()) scheduleRender();
+    });
+    $('#filter-prob-to')?.addEventListener('change', () => {
+        if (isAnalisiTabActive()) scheduleRender();
+    });
+
     // Filtri chip (settore, tipo, commessa) e bottone reset filtri.
     // Usiamo click delegato perché i chip possono essere ricreati dinamicamente.
     document.addEventListener('click', (e) => {

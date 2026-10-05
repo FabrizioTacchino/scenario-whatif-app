@@ -312,6 +312,14 @@
         <label>A</label>
         <input type="month" id="filter-date-to" />
       </div>
+      <div class="filter-group filter-group-prob">
+        <label>Prob. %</label>
+        <input type="number" id="filter-prob-from" min="0" max="100" step="5" placeholder="da"
+               title="Probabilità minima della commessa nello scenario selezionato — vuoto = nessun limite" />
+        <span class="filter-sep">–</span>
+        <input type="number" id="filter-prob-to" min="0" max="100" step="5" placeholder="a"
+               title="Probabilità massima della commessa nello scenario selezionato — vuoto = nessun limite" />
+      </div>
       <div class="filter-group year-shortcuts">
         <label>Anno</label>
         <button class="btn btn-year-shortcut btn-sm" data-year="2026">2026</button>
@@ -515,6 +523,19 @@
               <h3>Margine Mensile — Dettaglio per Commessa (Scenario)</h3>
               <button class="chart-download-btn" data-chart="details-mar" title="Scarica dati Excel"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></button>
               <div class="chart-wrap" style="min-height:380px;"><canvas id="chart-details-mar"></canvas></div>
+            </div>
+            <div class="chart-card" style="grid-column: span 2; position:relative;">
+              <h3>GANTT — Durata Commesse (Scenario)</h3>
+              <button class="chart-download-btn" data-chart="details-gantt" title="Scarica dati Excel"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></button>
+              <div style="display:flex;gap:14px;align-items:center;font-size:11px;color:var(--text-muted);margin:0 40px 6px 0;">
+                <span><i style="display:inline-block;width:9px;height:9px;border-radius:2px;background:#fb923c;margin-right:4px;"></i>Backlog</span>
+                <span><i style="display:inline-block;width:9px;height:9px;border-radius:2px;background:#638cff;margin-right:4px;"></i>Order Intake</span>
+                <span style="margin-left:auto;">Le barre mostrano la durata intera; la fascia evidenziata è il periodo filtrato</span>
+              </div>
+              <!-- min-height 280 e non 380: un min-height inline più alto vincerebbe
+                   sull'altezza impostata da JS, e con poche commesse il riquadro
+                   resterebbe bloccato alto. -->
+              <div class="chart-wrap" id="wrap-details-gantt" style="min-height:280px;"><canvas id="chart-details-gantt"></canvas></div>
             </div>
           </div>
           <!-- Tabelle dettaglio commessa -->

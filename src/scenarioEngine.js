@@ -17,6 +17,62 @@ function shiftMonth(monthStr, shift) {
 }
 
 /**
+ * Probabilità effettiva di una commessa nello scenario, IN PERCENTO (0-100).
+ *
+ * Le unità in questo progetto sono una trappola ricorrente:
+ *   comm.probabilitaAOP .......... 0-1
+ *   inputs.probabilita ........... 0-100
+ *   commessaResults.effectiveProbabilita ... 0-1   (altra cosa, vedi sotto)
+ * Questa restituisce PERCENTO perché è l'unità in cui ragiona l'utente e in cui
+ * sono scritti i limiti del filtro: così il confronto avviene senza conversioni
+ * sparse, che è esattamente il modo in cui nasce un "0.85%" al posto di "85%".
+ *
+ * Nessun controllo sul tipo, a differenza del calcolo del VDP più sotto: la
+ * tabella Assunzioni abilita e mostra la casella probabilità in base al tipo
+ * EFFETTIVO, quindi per una Backlog portata a Order Intake dallo scenario lì si
+ * legge l'override. Un filtro che non lo vedesse direbbe una cosa diversa dal
+ * numero scritto accanto. Resta quindi un'asimmetria voluta: il filtro vede
+ * l'override, il calcolo della VDP no. Non la introduco io — esisteva già fra
+ * il filtro "Solo Probabilità 100%" e il motore — e risolverla cambierebbe i
+ * numeri esportati, quindi è un lavoro a sé.
+ */
+export function probabilitaEffettivaPerc(comm, commInputs = {}) {
+    const ov = commInputs?.probabilita;
+    if (ov != null && ov !== '') {
+        const n = Number(ov);
+        if (Number.isFinite(n)) return n;
+    }
+    return comm?.probabilitaAOP != null ? Number(comm.probabilitaAOP) * 100 : 100;
+}
+
+/**
+ * La commessa rientra nell'intervallo di probabilità richiesto?
+ * Limite null/undefined = non applicato. Entrambi assenti = filtro inattivo.
+ */
+export function passaFiltroProbabilita(comm, commInputs, probFrom, probTo) {
+    if (probFrom == null && probTo == null) return true;
+    const p = probabilitaEffettivaPerc(comm, commInputs);
+    if (probFrom != null && p < probFrom) return false;
+    if (probTo != null && p > probTo) return false;
+    return true;
+}
+
+/**
+ * Primo e ultimo mese con VDP non nulla, sui mesi NON filtrati.
+ *
+ * Il confronto è `!== 0` e non `> 0`: un mese di solo storno (VDP negativa) fa
+ * parte della vita della commessa. È lo stesso criterio di
+ * getEffectiveCommessaDates in main.js, e le due strade devono dare lo stesso
+ * risultato.
+ */
+function estremiAttivita(mesi) {
+    const conVdp = (mesi || []).filter(m => (m.vdp || 0) !== 0).map(m => m.month).sort();
+    return conVdp.length
+        ? { dataInizio: conVdp[0], dataFine: conVdp[conVdp.length - 1] }
+        : { dataInizio: null, dataFine: null };
+}
+
+/**
  * Compute scenario for a single commessa
  * @param {object} commessa - commessa metadata
  * @param {Array} baselineMonths - array of {month, vdp, marginePerc, ...}
@@ -209,7 +265,8 @@ function computeBacklog(commessa, baselineMonths, inputs) {
  * @param {Array} commesse - list of commessa objects
  * @param {Map} monthlyData - Map<key, [{month, vdpAOP, vdpActual, vdpRemaining, ...}]>
  * @param {object} scenario - {id, name, type, inputs, importedData}
- * @param {object} filters - {settori:[], types:[], commesse:[], dateFrom, dateTo}
+ * @param {object} filters - {settori:[], types:[], commesse:[], dateFrom, dateTo, probFrom, probTo}
+ *                           probFrom/probTo in PERCENTO (0-100); null = limite non applicato
  * @returns {object} { monthly: [{month, baselineVDP, scenarioVDP, vdpActual, vdpRemaining, baselineMargine, scenarioMargine}], kpis, commessaResults }
  */
 export function computeScenario(commesse, monthlyData, scenario = {}, filters = {}) {
@@ -228,6 +285,8 @@ export function computeScenario(commesse, monthlyData, scenario = {}, filters = 
         const effectiveTypeForFilter = (scenarioInputs[comm.key] || {}).type || comm.type;
         if (filters.types && filters.types.length && !filters.types.includes(effectiveTypeForFilter)) continue;
         if (filters.commesse && filters.commesse.length && !filters.commesse.includes(comm.key)) continue;
+        // Probabilità: sola appartenenza, non tocca nessun calcolo
+        if (!passaFiltroProbabilita(comm, scenarioInputs[comm.key], filters.probFrom, filters.probTo)) continue;
 
         const baseline = monthlyData.get(comm.key) || [];
 
@@ -365,6 +424,12 @@ export function computeScenario(commesse, monthlyData, scenario = {}, filters = 
             return true;
         });
 
+        // Date di inizio e fine ricavate dai mesi NON filtrati: servono al Gantt,
+        // che deve mostrare la durata vera della commessa anche quando il filtro
+        // data restringe il periodo. Usare filteredScenMonths darebbe barre
+        // troncate. Nessun campo omonimo arriva dallo spread di `comm`.
+        const { dataInizio, dataFine } = estremiAttivita(scenarioMonths);
+
         commessaResults.push({
             ...comm,
             baseVdpTot,
@@ -377,6 +442,8 @@ export function computeScenario(commesse, monthlyData, scenario = {}, filters = 
             effectiveProbabilita,
             effectiveMargine,
             effectiveType,
+            dataInizio,
+            dataFine,
         });
     }
 

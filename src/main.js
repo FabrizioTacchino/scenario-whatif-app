@@ -4,7 +4,7 @@
 import './style.css';
 import { checkLicense, activateLicense } from './licenseManager.js';
 import { parseExcel, parseImportedScenario, dateToMonth } from './dataLoader.js';
-import { computeScenario, computeMultiScenario } from './scenarioEngine.js';
+import { computeScenario, computeMultiScenario, passaFiltroProbabilita, probabilitaEffettivaPerc } from './scenarioEngine.js';
 import {
     listScenarios, getScenario, createScenario, duplicateScenario,
     updateScenario, updateScenarioInput, deleteScenario,
@@ -1342,6 +1342,40 @@ function populateFilters() {
     // Date range: lasciato vuoto = nessun limite (mostra tutti i mesi, inclusi quelli degli scenari oltre la baseline)
     $('#filter-date-from').value = '';
     $('#filter-date-to').value = '';
+    // Idem per la probabilità: senza questo, un filtro impostato sopravvivrebbe
+    // al caricamento di un nuovo file AOP e i dati sembrerebbero incompleti.
+    $('#filter-prob-from').value = '';
+    $('#filter-prob-to').value = '';
+    _segnalaProbRovesciata();
+}
+
+/**
+ * Legge un limite di probabilità da una casella.
+ *
+ * Il percorso ovvio — Number(el.value) || null — qui fa due danni: Number('')
+ * vale 0, quindi una casella "a" lasciata vuota diventerebbe un limite a zero e
+ * farebbe sparire tutto; e `|| null` butterebbe via anche lo zero digitato
+ * davvero, che è un limite legittimo. Da qui il controllo esplicito sul vuoto e
+ * i confronti con != null ovunque più sotto.
+ */
+/** Bordo rosso quando "da" supera "a": il filtro si applica alla lettera e dà
+ *  zero risultati, ma senza un segnale sembrerebbe un guasto. */
+function _segnalaProbRovesciata() {
+    const da = _leggiLimiteProb('#filter-prob-from');
+    const a = _leggiLimiteProb('#filter-prob-to');
+    const rovesciato = da != null && a != null && da > a;
+    for (const sel of ['#filter-prob-from', '#filter-prob-to']) {
+        $(sel)?.classList.toggle('filter-input-invalid', rovesciato);
+    }
+}
+
+function _leggiLimiteProb(sel) {
+    const el = $(sel);
+    const grezzo = (el?.value ?? '').trim();
+    if (grezzo === '') return null;
+    const n = Number(grezzo);
+    if (!Number.isFinite(n)) return null;
+    return Math.min(100, Math.max(0, n));   // 150 si comporta come 100
 }
 
 function getActiveFilters() {
@@ -1354,6 +1388,8 @@ function getActiveFilters() {
         commesse: commesse,
         dateFrom: $('#filter-date-from').value || null,
         dateTo: $('#filter-date-to').value || null,
+        probFrom: _leggiLimiteProb('#filter-prob-from'),   // percento, null = nessun limite
+        probTo: _leggiLimiteProb('#filter-prob-to'),
     };
 }
 
@@ -1401,6 +1437,29 @@ function setupFilterEvents() {
         });
     }
 
+    // Filtro probabilità. Il ritardo non è un vezzo: refreshDashboard ricalcola
+    // lo scenario E ricostruisce ogni riga della tabella Assunzioni, e digitando
+    // "100" i passaggi "1" e "10" sono filtri diversi che innescherebbero due
+    // ricalcoli completi. A tendina chiusa (change) e con Invio si applica subito.
+    // Gli anni NON vanno deselezionati qui: la probabilità è ortogonale all'anno.
+    let _ritardoProb = null;
+    const _applicaProb = () => {
+        clearTimeout(_ritardoProb);
+        _segnalaProbRovesciata();
+        refreshDashboard();
+        if (document.querySelector('.tab-btn.active')?.dataset.tab === 'risorse') renderResourceTab();
+    };
+    for (const sel of ['#filter-prob-from', '#filter-prob-to']) {
+        const el = $(sel);
+        if (!el) continue;
+        el.addEventListener('input', () => {
+            clearTimeout(_ritardoProb);
+            _ritardoProb = setTimeout(_applicaProb, 250);
+        });
+        el.addEventListener('change', _applicaProb);
+        el.addEventListener('keydown', (e) => { if (e.key === 'Enter') _applicaProb(); });
+    }
+
     // Shortcut annualità
     $$('.btn-year-shortcut').forEach(btn => {
         btn.addEventListener('click', () => {
@@ -1445,6 +1504,12 @@ function setupFilterEvents() {
 
         $('#filter-date-from').value = '';
         $('#filter-date-to').value = '';
+        // Lo sweep sui .filter-chip.active qui sopra non raggiunge un input
+        // numerico: va azzerato a mano, altrimenti "Reset Filtri" lascerebbe
+        // attivo proprio quello che non si vede in forma di chip.
+        $('#filter-prob-from').value = '';
+        $('#filter-prob-to').value = '';
+        _segnalaProbRovesciata();
         refreshDashboard();
         const isRisorse = $('#tab-risorse')?.classList.contains('active');
         if (isRisorse) renderResourceTab();
@@ -2654,6 +2719,213 @@ function renderDetailsCharts(monthly, commessaResults = []) {
             // Listener already attached, just update pending data (already done above)
         }
     }
+
+    // Il Gantt per ultimo e protetto: se dovesse fallire, i due istogrammi e le
+    // tabelle sopra sono già disegnati e la scheda resta utilizzabile.
+    try {
+        _renderDetailsGantt(commessaResults);
+    } catch (err) {
+        console.error('[Gantt] disegno non riuscito:', err);
+        notify.registra('errore', 'gantt', 'Disegno del Gantt non riuscito', err?.stack || String(err));
+    }
+}
+
+// ── Gantt: aritmetica dei mesi ──────────────────────────────────────────
+// L'asse è lineare in "mesi dall'origine" e non temporale: Chart.js 4 vorrebbe
+// un adattatore per le date, che il progetto non ha. L'origine è fissata a
+// GENNAIO del primo anno utile: così i multipli dello stepSize cadono su gennai,
+// trimestri e semestri, e le etichette risultano allineate al calendario senza
+// dover intervenire sui tick.
+function _mesiDaOrigine(ym, annoOrigine) {
+    const [y, m] = String(ym).split('-').map(Number);
+    return (y - annoOrigine) * 12 + (m - 1);
+}
+function _mesiAData(i, annoOrigine) {
+    const tot = annoOrigine * 12 + i;
+    const y = Math.floor(tot / 12);
+    const m = (tot % 12) + 1;
+    return `${y}-${String(m).padStart(2, '0')}`;
+}
+
+/**
+ * Gantt delle commesse: una barra per commessa, dall'inizio alla fine.
+ *
+ * Due informazioni da due fonti diverse, ed è il punto da non confondere:
+ *   QUALI commesse  → commessaResults, già filtrato da tutti i filtri
+ *   DOVE inizia/finisce → dataInizio/dataFine, ricavati dai mesi NON filtrati
+ * Così restringere il periodo decide chi compare, ma le barre restano lunghe
+ * quanto la commessa: un diagramma che accorcia le barre nasconde proprio
+ * l'informazione per cui lo si guarda.
+ */
+function _renderDetailsGantt(commessaResults = []) {
+    const wrap = $('#wrap-details-gantt');
+    if (!wrap) return;
+    let canvas = $('#chart-details-gantt');
+
+    wrap.querySelectorAll('.no-data-msg').forEach(el => el.remove());
+
+    // Stesso criterio di inclusione dei due istogrammi sopra: contano i valori,
+    // non la lunghezza dell'array. Una commessa i cui mesi nel periodo sono
+    // tutti a zero non va mostrata.
+    const righe = commessaResults
+        .filter(c => c.dataInizio && c.dataFine)
+        .filter(c => (c.scenarioMonths || []).some(m => (m.vdp || 0) !== 0 || (m.margine || 0) !== 0))
+        .map(c => ({
+            codice: c.codice || '',
+            nome: c.nome || '',
+            tipo: c.effectiveType || c.type || '',
+            dataInizio: c.dataInizio,
+            dataFine: c.dataFine,
+            vdpPeriodo: (c.scenarioMonths || []).reduce((s, m) => s + (m.vdp || 0), 0),
+            marPeriodo: (c.scenarioMonths || []).reduce((s, m) => s + (m.margine || 0), 0),
+        }))
+        .sort((a, b) => a.dataInizio.localeCompare(b.dataInizio)
+                     || a.dataFine.localeCompare(b.dataFine)
+                     || a.codice.localeCompare(b.codice));
+
+    if (!righe.length) {
+        if (canvas) canvas.style.display = 'none';
+        wrap.style.height = '';
+        const p = document.createElement('p');
+        p.className = 'no-data-msg';
+        p.style.cssText = 'text-align:center;color:var(--text-muted);font-size:13px;padding:40px 0;';
+        p.textContent = 'Nessuna commessa con i filtri selezionati.';
+        wrap.appendChild(p);
+        // NIENTE assegnazione a charts.detailsGantt qui: le distruzioni in blocco
+        // fanno Object.values(charts).forEach(c => c.destroy()) senza optional
+        // chaining, e un undefined porterebbe via tutti i grafici della scheda
+        // successiva.
+        return;
+    }
+    if (canvas) canvas.style.display = '';
+
+    const annoOrigine = Number(righe[0].dataInizio.slice(0, 4));
+    const idx = (ym) => _mesiDaOrigine(ym, annoOrigine);
+
+    const minIdx = Math.min(...righe.map(r => idx(r.dataInizio)));
+    const maxIdx = Math.max(...righe.map(r => idx(r.dataFine))) + 1;   // fine esclusiva
+    const ampiezza = maxIdx - minIdx;
+    const passo = ampiezza <= 18 ? 1 : ampiezza <= 36 ? 3 : ampiezza <= 84 ? 6 : 12;
+
+    const COLORI = {
+        'Backlog':      { bg: 'rgba(251, 146, 60, 0.80)',  border: '#fb923c' },
+        'Order Intake': { bg: 'rgba(99,  140, 255, 0.80)', border: '#638cff' },
+    };
+    // Un tipo non previsto resta grigio invece di essere accorpato al Backlog:
+    // qui ogni barra è una commessa, colorarla arancio direbbe una cosa falsa.
+    const NEUTRO = { bg: 'rgba(138, 146, 168, 0.75)', border: '#8892a8' };
+    const colore = (t) => COLORI[t] || NEUTRO;
+
+    const tronca = (s, n) => (s && s.length > n ? s.substring(0, n) + '…' : (s || ''));
+
+    // Altezza riga decrescente: con 150 commesse un passo fisso darebbe un
+    // riquadro altissimo. Si usa height e non minHeight, così il riquadro si
+    // accorcia anche quando i filtri riducono le righe.
+    const hRiga = righe.length <= 40 ? 24 : righe.length <= 90 ? 18 : 13;
+    wrap.style.height = Math.max(280, righe.length * hRiga + 80) + 'px';
+
+    // Fascia del periodo filtrato
+    const f = getActiveFilters();
+    const daIdx = f.dateFrom ? idx(f.dateFrom) : null;
+    const aIdx = f.dateTo ? idx(f.dateTo) + 1 : null;
+    const fasciaPlugin = {
+        id: 'ganttFasciaFiltro',
+        beforeDatasetsDraw(chart) {
+            if (daIdx == null && aIdx == null) return;
+            const { ctx, chartArea, scales } = chart;
+            const x = scales.x;
+            const p1 = x.getPixelForValue(Math.max(x.min, daIdx ?? x.min));
+            const p2 = x.getPixelForValue(Math.min(x.max, aIdx ?? x.max));
+            if (!(p2 > p1)) return;
+            ctx.save();
+            ctx.fillStyle = 'rgba(99, 140, 255, 0.07)';
+            ctx.fillRect(p1, chartArea.top, p2 - p1, chartArea.bottom - chartArea.top);
+            ctx.strokeStyle = 'rgba(99, 140, 255, 0.35)';
+            ctx.setLineDash([4, 3]);
+            ctx.beginPath();
+            ctx.moveTo(p1, chartArea.top); ctx.lineTo(p1, chartArea.bottom);
+            ctx.moveTo(p2, chartArea.top); ctx.lineTo(p2, chartArea.bottom);
+            ctx.stroke();
+            ctx.restore();
+        },
+    };
+
+    charts.detailsGantt = new Chart(canvas, {
+        type: 'bar',
+        plugins: [fasciaPlugin],
+        data: {
+            labels: righe.map(r => tronca(`${r.codice} · ${r.nome}`, 38)),
+            datasets: [{
+                label: 'Durata',
+                // Fine esclusiva: [i, i+1] rende visibile anche una commessa di
+                // un mese solo, che con [i, i] avrebbe larghezza zero.
+                data: righe.map(r => [idx(r.dataInizio), idx(r.dataFine) + 1]),
+                backgroundColor: righe.map(r => colore(r.tipo).bg),
+                borderColor: righe.map(r => colore(r.tipo).border),
+                borderWidth: 1,
+                borderRadius: 2,
+                barThickness: Math.max(4, hRiga - 8),
+                minBarLength: 3,
+            }],
+        },
+        // Oggetto opzioni dedicato e non condiviso: Chart.js muta internamente
+        // options, e condividerne il riferimento ha già causato in questo
+        // progetto una prima barra invisibile.
+        options: {
+            indexAxis: 'y',
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { mode: 'nearest', intersect: true },
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    backgroundColor: '#1a2340',
+                    borderColor: 'rgba(255,255,255,0.15)',
+                    borderWidth: 1,
+                    titleFont: { family: 'Inter', size: 11 },
+                    bodyFont: { family: 'Inter', size: 11 },
+                    callbacks: {
+                        // Il nome per intero: è l'informazione che l'asse tronca
+                        title: (items) => righe[items[0].dataIndex]
+                            ? `${righe[items[0].dataIndex].codice} — ${righe[items[0].dataIndex].nome}` : '',
+                        label: (ctx) => {
+                            const r = righe[ctx.dataIndex];
+                            if (!r) return '';
+                            const durata = idx(r.dataFine) - idx(r.dataInizio) + 1;
+                            return [
+                                `Tipo: ${r.tipo || '—'}`,
+                                `Inizio: ${fmtYMForReport(r.dataInizio)}`,
+                                `Fine: ${fmtYMForReport(r.dataFine)}`,
+                                `Durata: ${durata} ${durata === 1 ? 'mese' : 'mesi'}`,
+                                `VDP nel periodo filtrato: ${formatEuro(r.vdpPeriodo)}`,
+                            ];
+                        },
+                    },
+                },
+            },
+            scales: {
+                x: {
+                    type: 'linear',
+                    min: minIdx,
+                    max: maxIdx,
+                    ticks: {
+                        stepSize: passo,
+                        autoSkip: false,
+                        color: '#5a6478',
+                        font: { size: 10 },
+                        maxRotation: 45,
+                        minRotation: 45,
+                        callback: (v) => Number.isInteger(v) ? fmtYMForReport(_mesiAData(v, annoOrigine)) : '',
+                    },
+                    grid: { color: 'rgba(255,255,255,0.04)' },
+                },
+                y: {
+                    ticks: { color: '#8892a8', font: { size: 10 }, autoSkip: false },
+                    grid: { display: false },
+                },
+            },
+        },
+    });
 }
 
 function _renderDetailsTables(commessaResults, months) {
@@ -3623,6 +3895,9 @@ function renderAssumptionsTable() {
         if (filters.types && filters.types.length && !filters.types.includes(effectiveTypeForAssumptions)) continue;
         // Sidebar selection Filter (only if some are selected)
         if (filters.commesse && filters.commesse.length && !filters.commesse.includes(comm.key)) continue;
+        // Probabilità — stessa funzione del motore, così questa tabella e il
+        // cruscotto non possono mostrare elenchi diversi
+        if (!passaFiltroProbabilita(comm, inputs[comm.key], filters.probFrom, filters.probTo)) continue;
         // Search Filter
         if (searchQuery) {
             const searchStr = `${comm.codice} ${comm.nome}`.toLowerCase();
@@ -5667,6 +5942,41 @@ function buildAndExportChart(chart) {
             }
         }
         exportChartToExcel('Details_Margine_per_Commessa', rows);
+        return;
+    }
+
+    if (chart === 'details-gantt') {
+        // Stesso insieme e stesso ordine del grafico: il file deve essere "i dati
+        // di quel grafico", non un altro taglio degli stessi numeri.
+        // Gli input servono per la probabilità: dev'essere la STESSA su cui si è
+        // filtrato, altrimenti il foglio contraddice lo schermo.
+        const inputsScen = (activeScenarioId ? getScenario(activeScenarioId)?.inputs : null) || {};
+        const rows = commessaResults
+            .filter(c => c.dataInizio && c.dataFine)
+            .filter(c => (c.scenarioMonths || []).some(m => (m.vdp || 0) !== 0 || (m.margine || 0) !== 0))
+            .sort((a, b) => a.dataInizio.localeCompare(b.dataInizio)
+                         || a.dataFine.localeCompare(b.dataFine)
+                         || String(a.codice).localeCompare(String(b.codice)))
+            .map(c => {
+                const anno0 = Number(c.dataInizio.slice(0, 4));
+                const durata = _mesiDaOrigine(c.dataFine, anno0) - _mesiDaOrigine(c.dataInizio, anno0) + 1;
+                return {
+                    'Codice':   c.codice,
+                    'Commessa': c.nome,
+                    'Settore':  c.settore,
+                    'Type':     c.effectiveType || c.type,
+                    'Probabilità %': Math.round(probabilitaEffettivaPerc(c, inputsScen[c.key])),
+                    // "YYYY-MM" grezzo e non "Mar 2026": ordinabile e filtrabile in Excel
+                    'Data Inizio': c.dataInizio,
+                    'Data Fine':   c.dataFine,
+                    'Durata (mesi)': durata,
+                    // Le ultime due sono le uniche grandezze del foglio che NON
+                    // sono a vita intera: dirlo evita la domanda "perché non torna".
+                    'VDP Scenario (periodo filtrato)':     Math.round((c.scenarioMonths || []).reduce((s, m) => s + (m.vdp || 0), 0)),
+                    'Margine Scenario (periodo filtrato)': Math.round((c.scenarioMonths || []).reduce((s, m) => s + (m.margine || 0), 0)),
+                };
+            });
+        exportChartToExcel('Details_Gantt_Commesse', rows);
         return;
     }
 

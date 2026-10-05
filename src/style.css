@@ -500,6 +500,24 @@ body {
   width: 140px;
 }
 
+/* Filtro probabilità: due caselle strette, per non allargare la barra filtri,
+   che è flex senza a capo e contiene già chip, date, anni, reset e zoom. */
+.filter-group input[type="number"] {
+  width: 62px;
+  text-align: right;
+}
+
+.filter-group .filter-sep {
+  color: var(--text-muted);
+  font-size: .8rem;
+}
+
+/* Intervallo rovesciato (da > a): si applica alla lettera e non si corregge da
+   solo, ma va detto, altrimenti "nessun risultato" sembra un guasto. */
+.filter-group input.filter-input-invalid {
+  border-color: var(--danger);
+}
+
 /* Filter Chips */
 .filter-chips {
   display: flex;

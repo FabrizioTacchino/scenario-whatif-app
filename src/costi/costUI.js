@@ -31,7 +31,7 @@ import {
     getCostsForCommessa,
 } from './costEngine.js';
 import { parseBIExport } from './biParser.js';
-import { computeScenario } from '../scenarioEngine.js';
+import { computeScenario, passaFiltroProbabilita } from '../scenarioEngine.js';
 import {
     loadBaseline,
     listScenarios,
@@ -320,6 +320,24 @@ export function getDateRangeFilter() {
     return { from: from || null, to: to || null };
 }
 
+/**
+ * Limiti del filtro probabilità, in percento. null se nessuno dei due è impostato.
+ * Attenzione al vuoto: Number('') vale 0, e una casella "a" lasciata vuota letta
+ * così farebbe sparire ogni commessa.
+ */
+export function getProbRangeFilter() {
+    const leggi = (sel) => {
+        const g = ($(sel)?.value ?? '').trim();
+        if (g === '') return null;
+        const n = Number(g);
+        return Number.isFinite(n) ? Math.min(100, Math.max(0, n)) : null;
+    };
+    const from = leggi('#filter-prob-from');
+    const to = leggi('#filter-prob-to');
+    if (from == null && to == null) return null;
+    return { from, to };
+}
+
 /** Verifica se un mese ("YYYY-MM") rientra nel range. */
 export function inDateRange(month, range) {
     if (!range) return true;
@@ -344,11 +362,16 @@ export function getFilteredCommesse(allCommesse) {
     const settori = getActiveChipValues('#filter-settore');
     const tipi = getActiveChipValues('#filter-type');
     const commesseKeys = getActiveChipValues('#filter-commessa');
+    const prob = getProbRangeFilter();
+    // Gli input dello scenario servono solo se il filtro probabilità è attivo:
+    // leggerli sempre costerebbe una lettura di scenario a ogni render.
+    const inputs = prob ? (getScenario(getActiveScenarioIdFromDOM())?.inputs || {}) : null;
 
     return allCommesse.filter(c => {
         if (settori.length && !settori.includes(c.settore)) return false;
         if (tipi.length && !tipi.includes(c.type)) return false;
         if (commesseKeys.length && !commesseKeys.includes(c.key)) return false;
+        if (prob && !passaFiltroProbabilita(c, inputs[c.key], prob.from, prob.to)) return false;
         return true;
     });
 }
@@ -2197,7 +2220,10 @@ function attachFilterWatchers() {
 
     // Filtri data: cattura modifiche utente diretto (change) + modifiche
     // programmatiche da pulsanti shortcut anno / reset filtri (click + defer rAF).
-    for (const sel of ['#filter-date-from', '#filter-date-to']) {
+    // Il filtro probabilità sta qui e non nell'observer qui sopra: quello guarda
+    // l'attributo "class" dei chip, mentre il valore di un input è una proprietà
+    // e non emette mutazioni. Aggiungerlo là non avrebbe effetto.
+    for (const sel of ['#filter-date-from', '#filter-date-to', '#filter-prob-from', '#filter-prob-to']) {
         const el = $(sel);
         if (el) {
             el.addEventListener('change', () => maybeRerenderCosti());
@@ -2341,16 +2367,21 @@ function computeCostiComparativo(scenAttuale, scenConfronto, baseline) {
     const tipi = getActiveChipValues('#filter-type');
     const commesseChip = getActiveChipValues('#filter-commessa');
 
-    const passFilters = (c) => {
+    // La probabilità dipende dallo scenario, quindi il filtro va valutato contro
+    // lo scenario della colonna: la stessa commessa può stare all'80% in uno e
+    // al 30% nell'altro, e il confronto deve dire proprio questo.
+    const prob = getProbRangeFilter();
+    const passFilters = (c, scen) => {
         if (settori.length && !settori.includes(c.settore)) return false;
         if (tipi.length && !tipi.includes(c.type)) return false;
         if (commesseChip.length && !commesseChip.includes(c.key)) return false;
+        if (prob && !passaFiltroProbabilita(c, scen?.inputs?.[c.key], prob.from, prob.to)) return false;
         return true;
     };
 
     // Pool commesse di ciascuno scenario, filtrato
-    const commesseAttuale = getCommesseForScenario(scenAttuale, baseline).filter(passFilters);
-    const commesseConfronto = getCommesseForScenario(scenConfronto, baseline).filter(passFilters);
+    const commesseAttuale = getCommesseForScenario(scenAttuale, baseline).filter(c => passFilters(c, scenAttuale));
+    const commesseConfronto = getCommesseForScenario(scenConfronto, baseline).filter(c => passFilters(c, scenConfronto));
 
     const allScenarios = listScenarios();
 
@@ -2396,6 +2427,10 @@ function computeCostiComparativo(scenAttuale, scenConfronto, baseline) {
         commesse: commesseChip,
         dateFrom: dateRange?.from || null,
         dateTo: dateRange?.to || null,
+        // Senza questi due, i costi e il VDP della STESSA tabella userebbero due
+        // insiemi di commesse diversi.
+        probFrom: prob?.from ?? null,
+        probTo: prob?.to ?? null,
     };
     const computeVdpMap = (scen) => {
         try {
