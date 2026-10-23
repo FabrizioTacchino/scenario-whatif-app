@@ -31,6 +31,9 @@ const DELETED_SCENARIOS_KEY = 'whatif_deleted_scenarios';
 const DELETED_PERSONE_KEY = 'whatif_deleted_persone';
 const DELETED_ALLOCAZIONI_KEY = 'whatif_deleted_allocazioni';
 const DELETED_RUOLI_KEY = 'whatif_deleted_ruoli';
+// Copia cloud della baseline NON applicata perche' qui c'erano modifiche non
+// ancora inviate: chiave unica, riscritta a ogni occorrenza, non accumula copie.
+const BASELINE_SCARTATA_KEY = 'whatif_baseline_cloud_scartata';
 
 // Role-based write permissions per entity
 const WRITE_ROLES = {
@@ -452,12 +455,18 @@ async function _incrementalSyncInterno(userId) {
             if (!canWrite(key)) continue;
             const currentHash = _hashString(localStorage.getItem(key) || '');
             if (currentHash !== _hashes[key]) {
-                try {
-                    await _pushEntity(key, userId);
-                    _hashes[key] = currentHash;
-                } catch (pushErr) {
-                    console.warn(`[SyncManager] Push ${key} failed (non-blocking):`, pushErr.message);
-                }
+                // L'hash si timbra SOLO a invio riuscito. _pushEntity non lancia
+                // mai: restituisce false alle sue uscite anticipate (:1727, 1730,
+                // 1734) e cattura tutto nel suo catch finale (:1763-1767), quindi
+                // il try/catch che stava qui era codice morto e l'hash avanzava
+                // anche a invio FALLITO. Da quel momento la modifica locale
+                // risultava "gia' inviata": la guardia della baseline taceva e il
+                // pull quindici righe piu' sotto la cancellava in silenzio, e il
+                // polling smetteva pure di ritentare. currentHash e' letto prima
+                // dell'await (:456): il verso era gia' giusto, mancava la
+                // condizione. Stessa forma gia' in uso nel polling (:1831).
+                const inviato = await _pushEntity(key, userId);
+                if (inviato) _hashes[key] = currentHash;
             }
         }
 
@@ -508,11 +517,22 @@ async function _pushBaseline(userId) {
     const data = JSON.parse(raw);
 
     // Baseline is a singleton: check if one exists, then update or insert
-    const { data: existing } = await supabase
+    // L'ordine e' lo stesso di _pullBaseline: se una seconda riga arrivasse
+    // comunque, push e pull devono almeno lavorare sulla stessa.
+    const { data: existing, error: errRicerca } = await supabase
         .from('baselines')
         .select('id')
+        .order('updated_at', { ascending: false })
+        .order('id')
         .limit(1)
         .maybeSingle();
+
+    // L'errore non si puo' scartare. Senza questo controllo un timeout, un
+    // rifiuto RLS o un JWT scaduto lasciavano 'existing' indefinito e il codice
+    // entrava nel ramo INSERT con una riga gia' presente, creando una SECONDA
+    // baseline: da quel momento alcuni client leggono una copia e altri l'altra,
+    // e nulla lo segnala. Stessa classe di errore gia' corretta in _cloudHasData.
+    if (errRicerca) throw new Error(`Push baseline failed: ${errRicerca.message}`);
 
     if (existing) {
         const { error } = await supabase
@@ -1010,16 +1030,72 @@ async function _pushPreferences(userId) {
 
 // ─── Pull helpers (shared — no user_id filter) ──────────────
 
+// La baseline e' il solo deposito condiviso che non si puo' fondere: e' un
+// oggetto unico (commesse[] piu' monthlyData indicizzato per `codice|||nome`),
+// non un elenco di righe con id, quindi _mergeRows non la riguarda, e non e'
+// tracciata per riga (DIRTY_TYPE_BY_SYNC_KEY non la elenca).
+// Lo scaricamento la riscriveva secco: un import AOP o una rinomina appena fatti
+// qui e non ancora inviati sparivano, in silenzio, senza che nessuno avesse
+// chiesto una sincronizzazione.
+
+/**
+ * true se la copia locale della baseline contiene modifiche non ancora inviate.
+ *
+ * L'indicatore che serve esiste gia' e non va costruito: _hashes viene aggiornato
+ * SOLO a push riuscito (_startPolling, _incrementalSyncInterno, _pushSubitoChiave),
+ * quindi un hash diverso da quello noto significa "qui c'e' lavoro che il cloud
+ * non ha ancora". E' la stessa informazione che _mergeRows prende da getDirty().
+ */
+function _baselineHaModificheNonInviate() {
+    // Se questo client non puo' inviare la baseline, una differenza locale non
+    // sara' mai risolvibile: trattenere lo scaricamento la bloccherebbe per
+    // sempre, e in quel caso il cloud deve vincere.
+    if (_pushBlocked || !canWrite('whatif_baseline')) return false;
+    // _hashes e' vuoto fino a _snapshotHashes(), che gira DOPO il fullPull di
+    // initSync: undefined vuol dire "non lo so", e lo scaricamento deve passare,
+    // altrimenti al primo avvio la baseline non si caricherebbe mai.
+    const noto = _hashes['whatif_baseline'];
+    if (noto === undefined) return false;
+    const raw = localStorage.getItem('whatif_baseline');
+    return !!raw && _hashString(raw) !== noto;
+}
+
+/**
+ * Chiamata quando lo scaricamento avrebbe sovrascritto una modifica locale non
+ * ancora inviata. Un conflitto vero sulla baseline non e' fondibile, quindi una
+ * delle due versioni perde comunque: qui sopravvive quella che l'utente ha sotto
+ * gli occhi (il polling la invia entro 2 s) e quella del cloud viene messa da
+ * parte e ANNUNCIATA. Il cambiamento non e' "si perde meno", e' "non si perde
+ * niente in silenzio".
+ */
+function _scartaBaselineCloud(dataCloud) {
+    console.warn('[SyncManager] Baseline dal cloud NON applicata: qui ci sono modifiche non ancora inviate');
+    safeSetItem(BASELINE_SCARTATA_KEY, JSON.stringify({
+        quando: new Date().toISOString(),
+        data: dataCloud
+    }));
+    // Evento una volta sola: _setStatus fonde in _status, e un flag che resta
+    // true rifarebbe comparire l'avviso a ogni cambio di stato successivo.
+    _setStatus({ baselineNonApplicata: true });
+    _status.baselineNonApplicata = false;
+}
+
 async function _pullBaseline() {
     const { data, error } = await supabase
         .from('baselines')
         .select('data')
+        .order('updated_at', { ascending: false })
+        .order('id')
         .limit(1)
         .maybeSingle();
 
     if (error) throw new Error(`Pull baseline failed: ${error.message}`);
     if (data?.data) {
-        safeSetItem('whatif_baseline', JSON.stringify(data.data));
+        if (_baselineHaModificheNonInviate()) {
+            _scartaBaselineCloud(data.data);
+        } else {
+            safeSetItem('whatif_baseline', JSON.stringify(data.data));
+        }
     }
 }
 
@@ -1193,15 +1269,27 @@ async function _pullIfNewer(since) {
     }
 
     // Baseline
-    const { data: bl } = await supabase
+    const { data: bl, error: errBaseline } = await supabase
         .from('baselines')
         .select('data, updated_at')
         .gt('updated_at', since)
+        .order('updated_at', { ascending: false })
+        .order('id')
         .limit(1)
         .maybeSingle();
 
+    // Nemmeno qui l'errore si puo' scartare, anche se la direzione e' benigna:
+    // chi chiama fa avanzare LAST_SYNC subito dopo, e con il filtro
+    // 'updated_at > since' la modifica del collega non verrebbe mai piu'
+    // ripescata. Lanciando, LAST_SYNC non avanza e il giro si ritenta.
+    if (errBaseline) throw new Error(`Pull baseline failed: ${errBaseline.message}`);
+
     if (bl?.data) {
-        safeSetItem('whatif_baseline', JSON.stringify(bl.data));
+        if (_baselineHaModificheNonInviate()) {
+            _scartaBaselineCloud(bl.data);
+        } else {
+            safeSetItem('whatif_baseline', JSON.stringify(bl.data));
+        }
     }
 
     // Scenarios
@@ -1599,7 +1687,24 @@ async function _pushEntityDirect(localStorageKey, userId) {
     if (_pushBlocked) return;
     if (!canWrite(localStorageKey) || !navigator.onLine) return;
     switch (localStorageKey) {
-        case 'whatif_baseline': await _pushBaseline(userId); break;
+        case 'whatif_baseline': {
+            // L'hash va calcolato PRIMA dell'invio. _pushBaseline fotografa il
+            // contenuto alla sua prima riga e fra questo punto e quella lettura
+            // non c'e' nessun await, quindi i due valori sono lo stesso.
+            // Leggendolo dopo si registrerebbe come "gia' inviato" un contenuto
+            // salvato mentre il push era in volo — un caricamento AOP concluso
+            // in quei secondi — e il primo scaricamento successivo lo
+            // cancellerebbe in silenzio: esattamente il difetto che la guardia
+            // esiste per chiudere.
+            const atteso = _hashString(localStorage.getItem('whatif_baseline') || '');
+            await _pushBaseline(userId);
+            // Senza questa riga la guardia di _baselineHaModificheNonInviate
+            // scatterebbe a vuoto nel percorso realtime, subito dopo un push
+            // riuscito: contenuto gia' sul cloud, hash ancora quello vecchio.
+            // E' la stessa riga che fa _pushSubitoChiave, per lo stesso motivo.
+            _hashes['whatif_baseline'] = atteso;
+            break;
+        }
         case 'whatif_scenarios': await _pushScenarios(userId); break;
         case 'whatif_persone': await _pushPersone(userId); break;
         case 'whatif_allocazioni': await _pushAllocazioni(userId); break;
@@ -1845,8 +1950,10 @@ async function _triggerRealtimeSyncInterno(userId) {
         }
 
         // Se il push non e' riuscito e restano modifiche locali non inviate, il
-        // pull non le distrugge piu' (ci pensa _mergeRows), ma l'utente deve
-        // saperlo: prima l'errore finiva solo in console.
+        // pull non le distrugge piu': per le entita' tracciate per riga ci pensa
+        // _mergeRows, per la baseline — che non e' fondibile — la guardia di
+        // _baselineHaModificheNonInviate. Ma l'utente deve saperlo: prima
+        // l'errore finiva solo in console.
         const inSospeso = countPendingChanges();
         if (pushFallito && inSospeso > 0) {
             _setStatus({
