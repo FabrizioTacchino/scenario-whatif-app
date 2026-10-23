@@ -14,7 +14,7 @@ import {
 } from './scenarioManager.js';
 import { exportToExcel, exportToCSV, exportToTemplate, exportChartToExcel } from './exportManager.js';
 import { initResourceModule, renderResourceTab, onScenarioDuplicated, apriRinominaCommessa } from './resourceUI.js';
-import { renameCommessaCodice, listPersone, listAllocazioni, deleteAllocazioniScenario } from './resourceManager.js';
+import { renameCommessaCodice, listPersone, listAllocazioni, deleteAllocazioniScenario, setEffectiveDatesResolver } from './resourceManager.js';
 import { safeSetItem, trackChanges, onStorageError, getStorageUsage } from './storage.js';
 import * as notify from './notify.js';
 import { registraRinomina, rilevaCodiciSuperati, pushRinomineToCloud, pullRinomineFromCloud } from './commesseRinominate.js';
@@ -297,7 +297,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     // Inizializza modulo risorse (non invasivo)
-    initResourceModule({
+    const _ctxRisorse = {
         getCommesse: () => {
             const base = appData?.commesse || [];
             const scen = activeScenarioId ? getScenario(activeScenarioId) : null;
@@ -366,7 +366,14 @@ document.addEventListener('DOMContentLoaded', async () => {
             _anteprimaRinominaCommessa(oldCodice, oldNome, newCodice, newNome),
         renameCommessa: (oldCodice, oldNome, newCodice, newNome) =>
             _eseguiRinominaCommessa(oldCodice, oldNome, newCodice, newNome),
-    });
+    };
+    initResourceModule(_ctxRisorse);
+
+    // Lo stesso risolutore, con la stessa cache, serve al controllo di
+    // saturazione dentro resourceManager: senza di esso quel controllo conta i
+    // mesi sulle date salvate, che per una riga agganciata sono un residuo.
+    // Registrato qui e non altrove perché i due non devono poter separarsi.
+    setEffectiveDatesResolver(_ctxRisorse.getEffectiveCommessaDates);
 
     await checkAndInitLicense();
 });
@@ -501,6 +508,14 @@ async function initCloudSync() {
             document.body.prepend(vb);
         }
 
+        // La baseline arrivata dal cloud non e' stata applicata perche' qui
+        // c'erano modifiche non ancora inviate. Va detto, e non basta
+        // l'indicatore: status.error non e' reso da nessuna parte, la UI legge
+        // solo state, lastSync, pushBlocked e dataChanged.
+        if (status.baselineNonApplicata) {
+            _mostraBannerBaselineNonApplicata();
+        }
+
         if (status.dataChanged) {
             // I dati arrivati dal cloud rendono obsolete le date gia' calcolate
             _invalidaCacheDate();
@@ -569,6 +584,52 @@ async function initCloudSync() {
     });
 }
 
+/**
+ * Avviso che la baseline del cloud NON e' stata applicata.
+ *
+ * La baseline e' un blocco unico e un conflitto vero non e' fondibile: una delle
+ * due versioni perde comunque. syncManager tiene quella locale, che l'utente ha
+ * sotto gli occhi, e mette da parte quella del cloud. Questo banner esiste perche'
+ * la versione messa da parte e' di un'altra persona: se sparisse in silenzio,
+ * quella persona vedrebbe il proprio lavoro annullato senza spiegazione.
+ *
+ * Resta fino alla chiusura esplicita, a differenza di _showSyncUpdateBanner: non
+ * e' una notifica di cortesia, e' una perdita di dati da leggere.
+ */
+function _mostraBannerBaselineNonApplicata() {
+    const esistente = $('#baseline-non-applicata-banner');
+    if (esistente) esistente.remove();
+
+    const banner = document.createElement('div');
+    banner.id = 'baseline-non-applicata-banner';
+    banner.style.cssText = 'position:fixed;bottom:16px;right:16px;max-width:460px;background:var(--bg-card,#fff);border:1px solid var(--warning,#f59e0b);border-left:4px solid var(--warning,#f59e0b);border-radius:8px;padding:12px 16px;font-size:12px;z-index:1300;box-shadow:0 4px 12px rgba(0,0,0,.18);display:flex;align-items:flex-start;gap:10px;';
+
+    const testo = document.createElement('div');
+    testo.style.cssText = 'color:var(--text);line-height:1.5;';
+
+    const titolo = document.createElement('strong');
+    titolo.textContent = 'Commesse modificate da un\'altra persona: non applicate qui';
+    testo.appendChild(titolo);
+
+    const dettaglio = document.createElement('div');
+    dettaglio.style.cssText = 'margin-top:4px;color:var(--text-muted);';
+    dettaglio.textContent = 'Qui ci sono modifiche alle commesse non ancora inviate al cloud, '
+        + 'e sovrascriverle le avrebbe cancellate. Le tue restano e vengono inviate ora. '
+        + 'La versione arrivata dal cloud e\' stata messa da parte: se serviva quella, '
+        + 'chiedi all\'altra persona di rifare la sua modifica.';
+    testo.appendChild(dettaglio);
+
+    const chiudi = document.createElement('button');
+    chiudi.textContent = '\u00d7';
+    chiudi.setAttribute('aria-label', 'Chiudi avviso');
+    chiudi.style.cssText = 'background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:16px;padding:0 4px;line-height:1;';
+    chiudi.addEventListener('click', () => banner.remove());
+
+    banner.appendChild(testo);
+    banner.appendChild(chiudi);
+    document.body.appendChild(banner);
+}
+
 function _showSyncUpdateBanner(changedKeys = []) {
     // If already visible, just refresh the message
     const existing = $('#sync-update-banner');
@@ -605,6 +666,7 @@ function _showSyncUpdateBanner(changedKeys = []) {
         const saved = loadBaseline();
         if (saved && appData) {
             appData = saved;
+            _invalidaCacheDate();   // la baseline è cambiata: le date calcolate sono scadute
             refreshDashboard();
             renderAssumptionsTable();
             if (document.querySelector('.tab-btn.active')?.dataset.tab === 'risorse') {
@@ -858,7 +920,7 @@ function setupCloudAuth() {
 
             // Il download può aver portato una baseline diversa: ricarico la vista
             const saved = loadBaseline();
-            if (saved) { appData = saved; initApp(); }
+            if (saved) { appData = saved; _invalidaCacheDate(); initApp(); }
 
             if (esito?.errore) {
                 updateCloudIndicator('error');

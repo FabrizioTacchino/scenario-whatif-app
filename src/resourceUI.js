@@ -1470,26 +1470,29 @@ async function _saveRenameCommessa() {
 // ─── RILEVAMENTO ALLOCAZIONI SCOPERTE ────────────────────────
 
 /**
- * Calcola se sincronizzare un'allocazione causerebbe sovrasaturazione (>100%/mese).
- * Replica la logica di _validateSaturation lato resourceManager: se la simulazione
- * dell'update fallirebbe il save, ritorna il messaggio specifico (es. mese e %),
- * così possiamo mostrarlo nel banner senza far cliccare l'utente "a vuoto".
+ * Dice se la sincronizzazione di un'allocazione fallirebbe il salvataggio, così
+ * il banner non fa cliccare l'utente "a vuoto".
+ *
+ * Il controllo di sovrasaturazione NON è più qui, e non è una dimenticanza.
+ * _validateSaturation ora conta i mesi sulle date effettive e blocca solo il
+ * peggioramento (resourceManager.js): la sincronizzazione riscrive la data
+ * salvata col valore che la data effettiva ha già, quindi l'intervallo effettivo
+ * non cambia, nessun mese peggiora e il salvataggio non può essere rifiutato per
+ * saturazione. Tenere qui la vecchia previsione disabiliterebbe il pulsante
+ * Sincronizza per un blocco che non avverrà: l'utente resterebbe chiuso fuori
+ * dall'unico attrezzo che ha per riallineare le date.
+ *
+ * Resta l'inversione, che è un motivo di rifiuto reale: _validateAllocazione
+ * confronta le date SALVATE, e la sincronizzazione scrive proprio quelle.
+ *
+ * allAllocazioni non serve più al calcolo: la firma resta invariata per non
+ * toccare il chiamante.
  */
 function _calcolaConflittoSaturazione(alloc, nuovaDi, nuovaDf, allAllocazioni) {
     const dataInizio = nuovaDi || alloc.dataInizio;
     const dataFine = nuovaDf || alloc.dataFine;
     if (!dataInizio || !dataFine) return null;
     if (dataInizio > dataFine) return `Data inizio (${formatYM(dataInizio)}) > data fine (${formatYM(dataFine)}) dopo sincronizzazione`;
-    const mesi = getMonthsInRange(dataInizio, dataFine);
-    for (const mese of mesi) {
-        const totale = allAllocazioni
-            .filter(a => a.id !== alloc.id && a.personaId === alloc.personaId && a.scenarioId === alloc.scenarioId)
-            .filter(a => a.dataInizio && a.dataFine && isMonthInRange(mese, a.dataInizio, a.dataFine))
-            .reduce((s, a) => s + (a.percentuale || 0), 0);
-        if (totale + (alloc.percentuale || 0) > 100) {
-            return `Sovrasaturazione ${totale + (alloc.percentuale || 0)}% nel mese ${formatYM(mese)} (occupato ${totale}% + ${alloc.percentuale || 0}%)`;
-        }
-    }
     return null;
 }
 

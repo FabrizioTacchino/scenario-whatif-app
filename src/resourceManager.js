@@ -24,6 +24,22 @@ const ALLOCAZIONI_KEY = 'whatif_allocazioni';
 const AUDIT_KEY = 'whatif_audit';
 const MESI_IT = ['Gen', 'Feb', 'Mar', 'Apr', 'Mag', 'Giu', 'Lug', 'Ago', 'Set', 'Ott', 'Nov', 'Dic'];
 
+/**
+ * Risolutore delle date di una commessa in uno scenario, iniettato una volta
+ * all'avvio da main.js accanto a initResourceModule. Finché non è registrato,
+ * risolviDateEffettive ripiega sulle date salvate: lo stesso comportamento che
+ * il modulo aveva prima di questa correzione.
+ */
+let _risolutoreDate = null;
+
+/**
+ * Registra la funzione che calcola le date di una commessa.
+ * Firma attesa: (codice, scenarioId) => { dataInizio, dataFine } | null.
+ */
+export function setEffectiveDatesResolver(fn) {
+    _risolutoreDate = typeof fn === 'function' ? fn : null;
+}
+
 function genId() {
     return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 }
@@ -287,7 +303,7 @@ export function saveAllocazione(data, origine = 'manuale') {
         if (_isScenarioLocked(all[idx].scenarioId)) return { error: 'Lo scenario è bloccato. Sblocca o duplica per modificare.' };
         const old = { ...all[idx] };
         const updated = { ...all[idx], ...data, updatedAt: now };
-        const err = _validateAllocazione(updated) || _validateSaturation(updated, all);
+        const err = _validateAllocazione(updated) || _validateSaturation(updated, all, old);
         if (err) return { error: err };
         all[idx] = updated;
         safeSetItem(ALLOCAZIONI_KEY, JSON.stringify(all));
@@ -311,7 +327,7 @@ export function saveAllocazione(data, origine = 'manuale') {
         createdAt: now, updatedAt: now,
     };
 
-    const err = _validateAllocazione(nuova) || _validateSaturation(nuova, all);
+    const err = _validateAllocazione(nuova) || _validateSaturation(nuova, all, null);
     if (err) return { error: err };
 
     all.push(nuova);
@@ -424,16 +440,80 @@ function _validateAllocazione(a) {
     return null;
 }
 
-function _validateSaturation(alloc, existing) {
+/**
+ * Saturazione: i mesi si contano sulle date EFFETTIVE, e si blocca solo il
+ * PEGGIORAMENTO.
+ *
+ * Due cambiamenti, e il secondo è la ragione per cui il primo è sicuro.
+ *
+ * (1) I mesi occupati si risolvono con risolviDateEffettive, cioè con le stesse
+ *     date che il motore usa per costi e matrice. Prima si confrontavano le date
+ *     SALVATE, che per una riga agganciata sono un residuo: il controllo era
+ *     cieco sulla quasi totalità delle righe e bloccava su sovrapposizioni
+ *     inesistenti.
+ *
+ * (2) Il confronto non è più "il totale del mese supera 100%" ma "questo
+ *     salvataggio porta il totale sopra 100% PIÙ di quanto fosse prima". Serve
+ *     perché la saturazione <= 100% non è un invariante dei dati salvati:
+ *     copyAllocazioniScenario accoda senza validare e syncManager scrive
+ *     whatif_allocazioni diretto. Le sovrasaturazioni preesistenti sono molte
+ *     (RISCHI.md 1.1: 163 coppie persona-commessa su 9 scenari). Con la vecchia
+ *     regola, correggere il punto (1) renderebbe immodificabili centinaia di
+ *     righe che l'utente non ha toccato — anche solo per cambiare una nota — e
+ *     renderebbe impossibile perfino ABBASSARE una percentuale, perché il
+ *     totale confrontato esclude la riga in esame.
+ *
+ * Conseguenza voluta: la sincronizzazione delle date non può più essere
+ * rifiutata per saturazione. Riscrive la data salvata col valore che la data
+ * effettiva ha già, quindi l'intervallo effettivo non cambia e nessun mese
+ * peggiora.
+ *
+ * @param {object} alloc            la riga come verrà salvata
+ * @param {Array}  existing         tutte le allocazioni, come stanno adesso
+ * @param {object|null} precedente  la riga come è adesso; null se è una creazione
+ */
+function _validateSaturation(alloc, existing, precedente = null) {
+    // Guardia lasciata DI PROPOSITO sulle date salvate e non su quelle
+    // effettive: le righe senza date salvate (possibili via import) oggi non
+    // vengono validate, e questa correzione non deve essere l'occasione per
+    // farle entrare nel controllo per la prima volta.
     if (!alloc.dataInizio || !alloc.dataFine) return null;
-    const mesi = getMonthsInRange(alloc.dataInizio, alloc.dataFine);
+
+    const dopo  = risolviDateEffettive(alloc, _risolutoreDate);
+    const prima = precedente ? risolviDateEffettive(precedente, _risolutoreDate)
+                             : { di: null, df: null };
+
+    // Una risoluzione per riga, dopo il filtro persona/scenario e FUORI dal
+    // ciclo sui mesi: dentro il .filter costerebbe una chiamata per ogni coppia
+    // (mese, riga), e su un import massivo sono milioni.
+    const altre = existing
+        .filter(a => a.id !== alloc.id && a.personaId === alloc.personaId && a.scenarioId === alloc.scenarioId)
+        .map(a => ({ perc: Number(a.percentuale) || 0, ...risolviDateEffettive(a, _risolutoreDate) }));
+
+    const percDopo  = Number(alloc.percentuale) || 0;
+    const percPrima = precedente ? (Number(precedente.percentuale) || 0) : 0;
+
+    // L'unione dei due intervalli, ordinata: un mese che la riga abbandona non
+    // può peggiorare, ma va comunque confrontato per non dichiarare
+    // peggioramenti che non esistono. Un intervallo effettivo invertito dà
+    // elenco vuoto, esattamente come lo vede il motore: quella riga non occupa
+    // nulla, e non bloccare è la risposta coerente.
+    const mesi = [...new Set([
+        ...getMonthsInRange(dopo.di, dopo.df),
+        ...getMonthsInRange(prima.di, prima.df),
+    ])].sort();
+
     for (const mese of mesi) {
-        const totale = existing
-            .filter(a => a.id !== alloc.id && a.personaId === alloc.personaId && a.scenarioId === alloc.scenarioId)
-            .filter(a => a.dataInizio && a.dataFine && isMonthInRange(mese, a.dataInizio, a.dataFine))
-            .reduce((s, a) => s + (a.percentuale || 0), 0);
-        if (totale + alloc.percentuale > 100) {
-            return `Saturazione > 100% nel mese ${formatYM(mese)} (occupato: ${totale}%, da aggiungere: ${alloc.percentuale}%)`;
+        const totaleAltre = altre
+            .filter(a => a.di && a.df && isMonthInRange(mese, a.di, a.df))
+            .reduce((s, a) => s + a.perc, 0);
+        const inDopo  = !!(dopo.di  && dopo.df  && isMonthInRange(mese, dopo.di,  dopo.df));
+        const inPrima = !!(prima.di && prima.df && isMonthInRange(mese, prima.di, prima.df));
+        const totaleDopo  = totaleAltre + (inDopo  ? percDopo  : 0);
+        const totalePrima = totaleAltre + (inPrima ? percPrima : 0);
+        if (totaleDopo > 100 && totaleDopo > totalePrima) {
+            return `Saturazione ${totaleDopo}% nel mese ${formatYM(mese)} `
+                 + `(altre allocazioni: ${totaleAltre}%, questa riga: ${percDopo}%)`;
         }
     }
     return null;
@@ -522,6 +602,41 @@ export function addMonths(ym, n) {
     const ny = Math.floor(total / 12);
     const nm = (total % 12) + 1;
     return `${ny}-${String(nm).padStart(2, '0')}`;
+}
+
+/**
+ * Date EFFETTIVE di un'allocazione: per ogni lato, se l'aggancio è attivo e la
+ * commessa ha una data in quello scenario, vale quella data più il delta;
+ * altrimenti vale la data salvata. Sono le stesse date che usa il motore
+ * (resourceEngine.js) per costi e matrice.
+ *
+ * Il ripiego sulla data salvata copre quattro casi — risolutore non registrato,
+ * aggancio spento, commessa senza date calcolabili in quello scenario, errore
+ * del risolutore — e in tutti e quattro il risultato è quello di prima della
+ * correzione. Non restituisce MAI null al posto della data base: un null
+ * cancellerebbe la riga dal conteggio e aprirebbe il controllo invece di
+ * chiuderlo (è il contratto opposto a quello di _effDates in resourceUI.js).
+ *
+ * Lo scenario è SEMPRE esplicito, `?? null`. Chiamare il risolutore con un
+ * argomento solo significherebbe "scenario attivo", che non è lo scenario della
+ * riga, e passare undefined farebbe scattare quel valore predefinito.
+ */
+export function risolviDateEffettive(alloc, getEffDates) {
+    if (!getEffDates || (!alloc.aggancioInizio && !alloc.aggancioFine)) {
+        return { di: alloc.dataInizio, df: alloc.dataFine };
+    }
+    let eff = null;
+    try { eff = getEffDates(alloc.codiceCommessa, alloc.scenarioId ?? null); }
+    catch { eff = null; }
+    const conDelta = (ym, delta) => (delta && ym) ? addMonths(ym, delta) : ym;
+    return {
+        di: alloc.aggancioInizio && eff?.dataInizio
+            ? conDelta(eff.dataInizio, alloc.deltaInizio || 0)
+            : alloc.dataInizio,
+        df: alloc.aggancioFine && eff?.dataFine
+            ? conDelta(eff.dataFine, alloc.deltaFine || 0)
+            : alloc.dataFine,
+    };
 }
 
 // Istanza unica: costruire un Intl.NumberFormat a ogni chiamata costa circa
