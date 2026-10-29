@@ -303,7 +303,7 @@ export function saveAllocazione(data, origine = 'manuale') {
         if (_isScenarioLocked(all[idx].scenarioId)) return { error: 'Lo scenario è bloccato. Sblocca o duplica per modificare.' };
         const old = { ...all[idx] };
         const updated = { ...all[idx], ...data, updatedAt: now };
-        const err = _validateAllocazione(updated) || _validateSaturation(updated, all, old);
+        const err = _validateAllocazione(updated) || _validateSaturation(updated, all);
         if (err) return { error: err };
         all[idx] = updated;
         safeSetItem(ALLOCAZIONI_KEY, JSON.stringify(all));
@@ -327,7 +327,7 @@ export function saveAllocazione(data, origine = 'manuale') {
         createdAt: now, updatedAt: now,
     };
 
-    const err = _validateAllocazione(nuova) || _validateSaturation(nuova, all, null);
+    const err = _validateAllocazione(nuova) || _validateSaturation(nuova, all);
     if (err) return { error: err };
 
     all.push(nuova);
@@ -441,47 +441,44 @@ function _validateAllocazione(a) {
 }
 
 /**
- * Saturazione: i mesi si contano sulle date EFFETTIVE, e si blocca solo il
- * PEGGIORAMENTO.
+ * Saturazione: i mesi si contano sulle date EFFETTIVE, e il tetto del 100% è
+ * un divieto secco.
  *
- * Due cambiamenti, e il secondo è la ragione per cui il primo è sicuro.
+ * I mesi occupati si risolvono con risolviDateEffettive, cioè con le stesse
+ * date che il motore usa per costi e matrice. Prima si confrontavano le date
+ * SALVATE, che per una riga agganciata sono un residuo: il controllo era cieco
+ * sulla quasi totalità delle righe — l'86% ne ha almeno una agganciata — e
+ * bloccava su sovrapposizioni inesistenti. Quella correzione resta: è il
+ * difetto per cui una persona con un buco vero fra due commesse si vedeva
+ * rifiutare il salvataggio.
  *
- * (1) I mesi occupati si risolvono con risolviDateEffettive, cioè con le stesse
- *     date che il motore usa per costi e matrice. Prima si confrontavano le date
- *     SALVATE, che per una riga agganciata sono un residuo: il controllo era
- *     cieco sulla quasi totalità delle righe e bloccava su sovrapposizioni
- *     inesistenti.
+ * Il tetto invece è tornato com'era, ed è voluto così: nessun salvataggio può
+ * portare un mese sopra il 100%, in creazione come in modifica. È una regola di
+ * mestiere — una persona non si alloca due volte — non un'euristica da
+ * ammorbidire per far passare un caso scomodo.
  *
- * (2) Il confronto non è più "il totale del mese supera 100%" ma "questo
- *     salvataggio porta il totale sopra 100% PIÙ di quanto fosse prima". Serve
- *     perché la saturazione <= 100% non è un invariante dei dati salvati:
- *     copyAllocazioniScenario accoda senza validare e syncManager scrive
- *     whatif_allocazioni diretto. Le sovrasaturazioni preesistenti sono molte
- *     (RISCHI.md 1.1: 163 coppie persona-commessa su 9 scenari). Con la vecchia
- *     regola, correggere il punto (1) renderebbe immodificabili centinaia di
- *     righe che l'utente non ha toccato — anche solo per cambiare una nota — e
- *     renderebbe impossibile perfino ABBASSARE una percentuale, perché il
- *     totale confrontato esclude la riga in esame.
+ * CONSEGUENZA NOTA, da non scoprire sul campo: la saturazione <= 100% NON è un
+ * invariante dei dati già salvati. copyAllocazioniScenario accoda senza
+ * validare e syncManager scrive whatif_allocazioni diretto, quindi esistono
+ * mesi già oltre il 100% (RISCHI.md 1.1). Su quelle righe ogni salvataggio
+ * viene rifiutato: anche il solo cambio di nota, e anche un ABBASSAMENTO della
+ * percentuale, perché il totale comprende le altre righe e resta sopra 100.
+ * L'unica uscita è cancellare una delle righe in conflitto — deleteAllocazione
+ * non passa di qui. È il comportamento storico dell'applicazione, riconfermato
+ * esplicitamente: chi lo cambia lo faccia di proposito, non per sbloccare una
+ * riga singola.
  *
- * Conseguenza voluta: la sincronizzazione delle date non può più essere
- * rifiutata per saturazione. Riscrive la data salvata col valore che la data
- * effettiva ha già, quindi l'intervallo effettivo non cambia e nessun mese
- * peggiora.
- *
- * @param {object} alloc            la riga come verrà salvata
- * @param {Array}  existing         tutte le allocazioni, come stanno adesso
- * @param {object|null} precedente  la riga come è adesso; null se è una creazione
+ * @param {object} alloc     la riga come verrà salvata
+ * @param {Array}  existing  tutte le allocazioni, come stanno adesso
  */
-function _validateSaturation(alloc, existing, precedente = null) {
+function _validateSaturation(alloc, existing) {
     // Guardia lasciata DI PROPOSITO sulle date salvate e non su quelle
     // effettive: le righe senza date salvate (possibili via import) oggi non
     // vengono validate, e questa correzione non deve essere l'occasione per
     // farle entrare nel controllo per la prima volta.
     if (!alloc.dataInizio || !alloc.dataFine) return null;
 
-    const dopo  = risolviDateEffettive(alloc, _risolutoreDate);
-    const prima = precedente ? risolviDateEffettive(precedente, _risolutoreDate)
-                             : { di: null, df: null };
+    const { di, df } = risolviDateEffettive(alloc, _risolutoreDate);
 
     // Una risoluzione per riga, dopo il filtro persona/scenario e FUORI dal
     // ciclo sui mesi: dentro il .filter costerebbe una chiamata per ogni coppia
@@ -490,30 +487,19 @@ function _validateSaturation(alloc, existing, precedente = null) {
         .filter(a => a.id !== alloc.id && a.personaId === alloc.personaId && a.scenarioId === alloc.scenarioId)
         .map(a => ({ perc: Number(a.percentuale) || 0, ...risolviDateEffettive(a, _risolutoreDate) }));
 
-    const percDopo  = Number(alloc.percentuale) || 0;
-    const percPrima = precedente ? (Number(precedente.percentuale) || 0) : 0;
+    const perc = Number(alloc.percentuale) || 0;
 
-    // L'unione dei due intervalli, ordinata: un mese che la riga abbandona non
-    // può peggiorare, ma va comunque confrontato per non dichiarare
-    // peggioramenti che non esistono. Un intervallo effettivo invertito dà
-    // elenco vuoto, esattamente come lo vede il motore: quella riga non occupa
-    // nulla, e non bloccare è la risposta coerente.
-    const mesi = [...new Set([
-        ...getMonthsInRange(dopo.di, dopo.df),
-        ...getMonthsInRange(prima.di, prima.df),
-    ])].sort();
-
-    for (const mese of mesi) {
+    // Un intervallo effettivo invertito dà elenco vuoto, esattamente come lo
+    // vede il motore: quella riga non occupa nulla, e non bloccare è la
+    // risposta coerente.
+    for (const mese of getMonthsInRange(di, df)) {
         const totaleAltre = altre
             .filter(a => a.di && a.df && isMonthInRange(mese, a.di, a.df))
             .reduce((s, a) => s + a.perc, 0);
-        const inDopo  = !!(dopo.di  && dopo.df  && isMonthInRange(mese, dopo.di,  dopo.df));
-        const inPrima = !!(prima.di && prima.df && isMonthInRange(mese, prima.di, prima.df));
-        const totaleDopo  = totaleAltre + (inDopo  ? percDopo  : 0);
-        const totalePrima = totaleAltre + (inPrima ? percPrima : 0);
-        if (totaleDopo > 100 && totaleDopo > totalePrima) {
-            return `Saturazione ${totaleDopo}% nel mese ${formatYM(mese)} `
-                 + `(altre allocazioni: ${totaleAltre}%, questa riga: ${percDopo}%)`;
+        const totale = totaleAltre + perc;
+        if (totale > 100) {
+            return `Saturazione ${totale}% nel mese ${formatYM(mese)} `
+                 + `(altre allocazioni: ${totaleAltre}%, questa riga: ${perc}%)`;
         }
     }
     return null;

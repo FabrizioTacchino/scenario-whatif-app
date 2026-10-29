@@ -1474,13 +1474,15 @@ async function _saveRenameCommessa() {
  * il banner non fa cliccare l'utente "a vuoto".
  *
  * Il controllo di sovrasaturazione NON è più qui, e non è una dimenticanza.
- * _validateSaturation ora conta i mesi sulle date effettive e blocca solo il
- * peggioramento (resourceManager.js): la sincronizzazione riscrive la data
- * salvata col valore che la data effettiva ha già, quindi l'intervallo effettivo
- * non cambia, nessun mese peggiora e il salvataggio non può essere rifiutato per
- * saturazione. Tenere qui la vecchia previsione disabiliterebbe il pulsante
- * Sincronizza per un blocco che non avverrà: l'utente resterebbe chiuso fuori
- * dall'unico attrezzo che ha per riallineare le date.
+ * Il tetto del 100% è secco, quindi la sincronizzazione PUÒ essere rifiutata:
+ * ma rifarne qui la previsione significherebbe riscrivere a mano il conteggio
+ * sulle date effettive — la terza copia della stessa logica, e la copia sbagliata
+ * è esattamente il difetto che bloccava su sovrapposizioni inesistenti. La
+ * previsione la fa l'unico proprietario della regola, _validateSaturation in
+ * resourceManager.js, e il rifiuto viene mostrato dal chiamante:
+ * _sincronizzaAllocazione riporta res.error all'utente, _sincronizzaTutto conta
+ * le bloccate. Il messaggio che arriva da lì nomina il mese e le percentuali,
+ * cosa che una previsione qui non saprebbe fare.
  *
  * Resta l'inversione, che è un motivo di rifiuto reale: _validateAllocazione
  * confronta le date SALVATE, e la sincronizzazione scrive proprio quelle.
@@ -1565,7 +1567,16 @@ async function _sincronizzaAllocazione(allocId) {
         update.dataInizio = addMonths(eff.dataInizio, alloc.deltaInizio || 0);
     if (alloc.aggancioFine && eff.dataFine)
         update.dataFine = addMonths(eff.dataFine, alloc.deltaFine || 0);
-    saveAllocazione(update);
+    // Il ritorno NON si ignora: con il tetto del 100% secco, il salvataggio può
+    // essere rifiutato (la persona è già oltre il 100% in uno dei mesi) e senza
+    // questo controllo il pulsante sembrerebbe non fare nulla.
+    const res = saveAllocazione(update);
+    if (res && res.error) {
+        alert(`Sincronizzazione non eseguita.\n\n${res.error}\n\n`
+            + 'Abbassa o sposta una delle altre allocazioni della persona in quel mese, '
+            + 'poi riprova.');
+        return;
+    }
     _renderSubTab(_currentSubTab);
     try {
         await pushAllocazioniNow();
