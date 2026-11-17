@@ -625,6 +625,23 @@ export function risolviDateEffettive(alloc, getEffDates) {
     };
 }
 
+/**
+ * Come risolviDateEffettive, ma con il risolutore gia' registrato.
+ *
+ * E' la forma che serve a chi disegna: la UI non ha motivo di conoscere il
+ * risolutore, e finche' doveva passarglielo ha semplicemente usato le date
+ * SALVATE — che su una riga agganciata sono un residuo. Risultato: la barra
+ * "Saturazione mensile" mostrava 100% su mesi che ne valevano 200, perche'
+ * contava su date diverse da quelle scritte nella tabella sopra di lei.
+ *
+ * Tenere un solo proprietario della regola e' il punto: barra, anteprima nella
+ * finestra di inserimento e validazione del salvataggio devono rispondere
+ * sulle stesse date, altrimenti tornano a smentirsi a vicenda.
+ */
+export function risolviDateEffettiveCorrenti(alloc) {
+    return risolviDateEffettive(alloc, _risolutoreDate);
+}
+
 // Istanza unica: costruire un Intl.NumberFormat a ogni chiamata costa circa
 // 80 volte piu' della formattazione stessa, e qui si formatta a migliaia.
 const _fmtEuro = new Intl.NumberFormat('it-IT', {

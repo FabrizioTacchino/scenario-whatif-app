@@ -9,7 +9,7 @@ import {
     listAllocazioni, getAllocazione, saveAllocazione, deleteAllocazione,
     copyAllocazioniScenario, deleteAllocazioniScenario,
     importPersoneFromRows, importAllocazioniFromRows,
-    getMonthsInRange, isMonthInRange,
+    getMonthsInRange, isMonthInRange, risolviDateEffettiveCorrenti,
     formatYM, formatEuro, excelSerialToYM, checkWarnings, addMonths,
     listRuoli, saveRuolo, deleteRuolo, syncRuoliFromPersone, renameRuolo,
 } from './resourceManager.js';
@@ -735,15 +735,27 @@ function _buildPersonaDetail(persona, scenarioId) {
 
 function _buildSaturationBar(personaId, allocazioni) {
     if (!allocazioni.length) return '';
+
+    // Date EFFETTIVE: le stesse che la tabella qui sopra stampa e che il
+    // salvataggio usa per bloccare. Con le date SALVATE questa barra mostrava
+    // verde 100% su mesi che ne valevano 200, perche' su una riga agganciata
+    // la data salvata e' un residuo e non ha piu' relazione con il mese in cui
+    // la persona lavora davvero. Una risoluzione per riga, fuori dal ciclo sui
+    // mesi: dentro il filter sarebbe una chiamata per ogni coppia (mese, riga).
+    const righe = allocazioni.map(a => ({
+        perc: Number(a.percentuale) || 0,
+        ...risolviDateEffettiveCorrenti(a),
+    }));
+
     const monthSet = new Set();
-    allocazioni.forEach(a => { if (a.dataInizio && a.dataFine) getMonthsInRange(a.dataInizio, a.dataFine).forEach(m => monthSet.add(m)); });
+    righe.forEach(r => { if (r.di && r.df) getMonthsInRange(r.di, r.df).forEach(m => monthSet.add(m)); });
     const months = [...monthSet].sort();
     if (!months.length) return '';
 
     const cells = months.map(mese => {
-        const tot = allocazioni
-            .filter(a => a.dataInizio && a.dataFine && isMonthInRange(mese, a.dataInizio, a.dataFine))
-            .reduce((s, a) => s + a.percentuale, 0);
+        const tot = righe
+            .filter(r => r.di && r.df && isMonthInRange(mese, r.di, r.df))
+            .reduce((s, r) => s + r.perc, 0);
         const cls = tot === 0 ? 'sat-zero' : tot < 100 ? 'sat-sotto' : tot === 100 ? 'sat-ok' : 'sat-sovra';
         return `<div class="res-sat-bar-cell ${cls}" title="${formatYM(mese)}: ${tot}%">
             <span class="res-sat-m">${mese.slice(5)}</span>
@@ -2239,10 +2251,12 @@ function _renderCapacity() {
 
     // Collect months (from ALL allocations, not filtered by persona)
     const monthSet = new Set();
+    // Era una copia a mano della risoluzione, e saltava i delta: su 505 righe
+    // che ne hanno uno l'asse dei mesi poteva partire o finire nel mese
+    // sbagliato, e la matrice li scarta (months.includes). Stesso risolutore
+    // della barra, dell'anteprima e del salvataggio.
     allocazioni.forEach(a => {
-        const eff = (a.aggancioInizio || a.aggancioFine) ? _ctx.getEffectiveCommessaDates(a.codiceCommessa) : null;
-        const di = (a.aggancioInizio && eff?.dataInizio) ? eff.dataInizio : a.dataInizio;
-        const df = (a.aggancioFine   && eff?.dataFine)   ? eff.dataFine   : a.dataFine;
+        const { di, df } = risolviDateEffettiveCorrenti(a);
         if (di && df) getMonthsInRange(di, df).forEach(m => monthSet.add(m));
     });
 
@@ -2515,21 +2529,14 @@ function _renderCapacity() {
 
 // ─── DISPONIBILITÀ / FABBISOGNO ──────────────────────────────
 
-function _resolveAllocDateRange(a, getEffDates) {
-    if (!getEffDates || (!a.aggancioInizio && !a.aggancioFine)) {
-        return { di: a.dataInizio, df: a.dataFine };
-    }
-    const eff = getEffDates(a.codiceCommessa);
-    const addM = (ym, delta) => {
-        if (!delta || !ym) return ym;
-        const [y, m] = ym.split('-').map(Number);
-        const t = y * 12 + (m - 1) + delta;
-        return `${Math.floor(t / 12)}-${String((t % 12) + 1).padStart(2, '0')}`;
-    };
-    return {
-        di: a.aggancioInizio && eff?.dataInizio ? addM(eff.dataInizio, a.deltaInizio || 0) : a.dataInizio,
-        df: a.aggancioFine && eff?.dataFine ? addM(eff.dataFine, a.deltaFine || 0) : a.dataFine,
-    };
+/**
+ * Era la quinta copia della risoluzione, e chiedeva le date della commessa
+ * SENZA scenario: un argomento solo significa "scenario attivo", che non e'
+ * necessariamente quello della riga. Ora delega al proprietario unico della
+ * regola; la firma resta per non toccare i chiamanti.
+ */
+function _resolveAllocDateRange(a, _getEffDates) {
+    return risolviDateEffettiveCorrenti(a);
 }
 
 function _buildDisponibilitaSection(persone, allocazioni, commesse, months, getEffDates, matrix) {
@@ -3098,14 +3105,35 @@ function _checkAllocSat() {
     const warn = $('#res-alloc-warn');
     if (!warn || !personaId || !perc || !di || !df) { if (warn) warn.textContent = ''; return; }
 
-    const existing = listAllocazioni();
-    const mesi = getMonthsInRange(di, df);
+    // Stesse date che usera' il salvataggio per decidere. Prima questa
+    // anteprima contava sulle date SALVATE delle altre righe: su una riga
+    // agganciata sono un residuo, quindi poteva dire "tutto a posto" e poi
+    // farti rifiutare il salvataggio — o tacere su una sovrapposizione vera.
+    //
+    // Anche la riga in corso va risolta: i campi del modulo contengono le date
+    // BASE, e se gli agganci sono accesi i mesi occupati sono altri.
+    const aggancioInizio = $('#chk-aggancio-di')?.checked || false;
+    const aggancioFine   = $('#chk-aggancio-df')?.checked || false;
+    const inCorso = risolviDateEffettiveCorrenti({
+        codiceCommessa: $('#res-alloc-commessa')?.value || '',
+        scenarioId, dataInizio: di, dataFine: df,
+        aggancioInizio, aggancioFine,
+        deltaInizio: aggancioInizio ? (parseInt($('#res-delta-di')?.value) || 0) : 0,
+        deltaFine:   aggancioFine   ? (parseInt($('#res-delta-df')?.value) || 0) : 0,
+    });
+
+    const altre = listAllocazioni()
+        .filter(a => a.id !== _editingAllocId && a.personaId === personaId && a.scenarioId === scenarioId)
+        .map(a => ({ perc: Number(a.percentuale) || 0, ...risolviDateEffettiveCorrenti(a) }));
+
+    const totaleAltreNelMese = (mese) => altre
+        .filter(a => a.di && a.df && isMonthInRange(mese, a.di, a.df))
+        .reduce((s, a) => s + a.perc, 0);
+
+    const mesi = getMonthsInRange(inCorso.di, inCorso.df);
     const overMesi = [];
     for (const mese of mesi) {
-        const tot = existing
-            .filter(a => a.id !== _editingAllocId && a.personaId === personaId && a.scenarioId === scenarioId)
-            .filter(a => a.dataInizio && a.dataFine && isMonthInRange(mese, a.dataInizio, a.dataFine))
-            .reduce((s, a) => s + a.percentuale, 0);
+        const tot = totaleAltreNelMese(mese);
         if (tot + perc > 100) overMesi.push(`${formatYM(mese)} (${tot + perc}%)`);
     }
     if (overMesi.length) {
@@ -3113,13 +3141,7 @@ function _checkAllocSat() {
         warn.textContent = `⚠ Saturazione > 100%: ${overMesi.slice(0, 3).join(', ')}${overMesi.length > 3 ? '…' : ''}`;
     } else {
         warn.className = 'res-alloc-info-msg';
-        const max = mesi.reduce((mx, mese) => {
-            const tot = existing
-                .filter(a => a.id !== _editingAllocId && a.personaId === personaId && a.scenarioId === scenarioId)
-                .filter(a => isMonthInRange(mese, a.dataInizio, a.dataFine))
-                .reduce((s, a) => s + a.percentuale, 0);
-            return Math.max(mx, tot + perc);
-        }, 0);
+        const max = mesi.reduce((mx, mese) => Math.max(mx, totaleAltreNelMese(mese) + perc), 0);
         warn.textContent = max < 100 && max > 0 ? `Saturazione massima: ${max}% — risorsa parzialmente allocata` : '';
     }
 }
@@ -3432,11 +3454,14 @@ function _exportRisorse() {
     const commesse = _ctx.getCommesse();
     const allocazioni = listAllocazioni({ scenarioId });
 
-    // Raccolta mesi
+    // Raccolta mesi sulle date EFFETTIVE: la matrice qui sotto lavora su quelle
+    // e scarta i mesi fuori da questo elenco (months.includes). Con le date
+    // salvate l'asse e la matrice guardavano periodi diversi, e un mese
+    // sovrallocato che cadeva solo nel periodo effettivo spariva dal foglio.
     const monthSet = new Set();
     allocazioni.forEach(a => {
-        if (a.dataInizio && a.dataFine)
-            getMonthsInRange(a.dataInizio, a.dataFine).forEach(m => monthSet.add(m));
+        const { di, df } = risolviDateEffettiveCorrenti(a);
+        if (di && df) getMonthsInRange(di, df).forEach(m => monthSet.add(m));
     });
     const months = [...monthSet].sort();
 
