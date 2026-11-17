@@ -1,6 +1,6 @@
 {
   "name": "analisi-scenari-vdp",
-  "version": "1.0.93",
+  "version": "1.0.94",
   "type": "module",
   "main": "main.cjs",
   "scripts": {

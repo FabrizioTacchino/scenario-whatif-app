@@ -1148,6 +1148,27 @@ body {
   max-width: 600px;
   box-shadow: 0 25px 60px rgba(0, 0, 0, .5);
   animation: fadeUp .3s ease;
+
+  /* Senza questi tre, una finestra piu' alta dello schermo sfora sopra E sotto
+     il bordo (la .modal e' centrata con align-items:center) e il pulsante in
+     fondo diventa irraggiungibile: la pagina non scorre, html ha
+     overflow:hidden. Su un portatile basso succedeva con la maschera Persona.
+     Tutte e 15 le finestre hanno la stessa struttura header + body, quindi la
+     regola vale per tutte senza toccare il markup. */
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Il corpo e' l'unica parte che scorre: l'intestazione con il titolo e la X
+   resta ferma, cosi' la finestra si chiude sempre anche a meta' scorrimento. */
+.modal-body {
+  overflow-y: auto;
+}
+
+.modal-header,
+.modal-footer {
+  flex-shrink: 0;
 }
 
 .modal-sm {
