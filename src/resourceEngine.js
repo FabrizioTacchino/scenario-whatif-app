@@ -3,34 +3,13 @@
  * Completamente separato dalla logica scenari esistente.
  */
 
-import { listAllocazioni, listPersone, getMonthsInRange, addMonths } from './resourceManager.js';
+import { listAllocazioni, listPersone, getMonthsInRange, risolviDateEffettive } from './resourceManager.js';
 
 /**
  * Matrice mensile completa per uno scenario.
  * Restituisce: Map<personaId, Map<mese, CellData>>
  * CellData: { allocazioni[], totalePerc, costoTotale, costoProb, fte, saturazione }
  */
-/**
- * Risolve le date effettive di un'allocazione tenendo conto dei flag di aggancio.
- * @param {object} alloc
- * @param {function} getEffectiveDates - _ctx.getEffectiveCommessaDates
- */
-function _resolveAllocDates(alloc, getEffectiveDates) {
-    if (!getEffectiveDates || (!alloc.aggancioInizio && !alloc.aggancioFine)) {
-        return { di: alloc.dataInizio, df: alloc.dataFine };
-    }
-    const eff = getEffectiveDates(alloc.codiceCommessa);
-    const applyDelta = (ym, delta) => (delta && ym) ? addMonths(ym, delta) : ym;
-    return {
-        di: alloc.aggancioInizio && eff?.dataInizio
-            ? applyDelta(eff.dataInizio, alloc.deltaInizio || 0)
-            : alloc.dataInizio,
-        df: alloc.aggancioFine && eff?.dataFine
-            ? applyDelta(eff.dataFine, alloc.deltaFine || 0)
-            : alloc.dataFine,
-    };
-}
-
 export function computeResourceMatrix(scenarioId, commesse = [], months = [], getEffectiveDates = null) {
     const allocazioni = listAllocazioni({ scenarioId });
     const persone = listPersone();
@@ -40,7 +19,13 @@ export function computeResourceMatrix(scenarioId, commesse = [], months = [], ge
         const persona = persone.find(p => p.id === alloc.personaId);
         if (!persona) continue;
 
-        const { di, df } = _resolveAllocDates(alloc, getEffectiveDates);
+        // risolviDateEffettive passa SEMPRE `alloc.scenarioId ?? null`. La copia
+        // locale che stava qui chiamava il risolutore con il solo codice, e
+        // quello in quel caso ripiega sullo scenario ATTIVO: la matrice di uno
+        // scenario veniva costruita con le date di un altro. Si vedeva solo
+        // guardando uno scenario diverso da quello attivo — cioe' nel report,
+        // che lo scenario lo riceve esplicito.
+        const { di, df } = risolviDateEffettive(alloc, getEffectiveDates);
         if (!di || !df) continue;
 
         // Limite contratto: non contare costi fuori dal periodo di assunzione della persona

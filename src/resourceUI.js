@@ -893,7 +893,12 @@ function _renderPianificazione() {
                         const _cessatoBadge = (() => {
                             if (!p) return '';
                             const termine = p.dataTermine?.slice(0, 7);
-                            const dfA = a.dataFine?.slice(0, 7);
+                            // Data in vigore, non quella salvata: su una riga agganciata la
+                            // seconda e' un residuo, e il confronto con la cessazione
+                            // girava su un mese in cui la persona non lavora. Poteva
+                            // avvisare a sproposito e, peggio, tacere quando l'allocazione
+                            // vera sfora davvero il contratto.
+                            const dfA = _effDates(a).df?.slice(0, 7);
                             if (termine && dfA && dfA > termine) return `<span class="res-badge-cessato">⚠ ${termine <= new Date().toISOString().slice(0,7) ? 'Cessato' : 'Cesserà'} ${formatYM(termine)}</span>`;
                             if (!_isPersonaAttiva(p) && termine) return `<span class="res-badge-cessato">⚠ Cessato ${formatYM(termine)}</span>`;
                             if (!_isPersonaAttiva(p)) return `<span class="res-badge-cessato">⚠ Non attiva</span>`;
@@ -1523,7 +1528,11 @@ function _detectAllocazioniScoperte(allocazioni, commesse, persone) {
         // intenzionali e non devono mai essere segnalate come "da sincronizzare".
         if (!alloc.aggancioInizio && !alloc.aggancioFine) continue;
 
-        const eff = _ctx.getEffectiveCommessaDates(alloc.codiceCommessa);
+        // Lo scenario della riga va passato: senza, si ripiega su quello ATTIVO
+        // e una riga di un altro scenario viene confrontata con date che non
+        // sono le sue — annunciata come da sincronizzare quando e' a posto, o
+        // taciuta quando non lo e'.
+        const eff = _ctx.getEffectiveCommessaDates(alloc.codiceCommessa, alloc.scenarioId ?? null);
         if (!eff) continue;
 
         const persona = persone.find(p => p.id === alloc.personaId);
@@ -1572,7 +1581,9 @@ async function _sincronizzaAllocazione(allocId) {
     if (_isActiveScenarioLocked()) { alert('Scenario bloccato. Sblocca o duplica per sincronizzare le date.'); return; }
     const alloc = getAllocazione(allocId);
     if (!alloc) return;
-    const eff = _ctx.getEffectiveCommessaDates(alloc.codiceCommessa);
+    // Stesso scenario della riga del rilevatore: il pulsante deve scrivere
+    // esattamente la data che l'avviso ha annunciato, non un'altra.
+    const eff = _ctx.getEffectiveCommessaDates(alloc.codiceCommessa, alloc.scenarioId ?? null);
     if (!eff) return;
     const update = { id: allocId };
     if (alloc.aggancioInizio && eff.dataInizio)
@@ -3001,15 +3012,24 @@ function _fmtDateCell(ym, agganciato, effDate = null) {
         : formatYM(ym);
 }
 
-/** Restituisce le date effettive di un'allocazione (rispetta flag aggancio + delta mesi) */
+/**
+ * Date in vigore di un'allocazione: quelle su cui la persona lavora davvero,
+ * aggancio e delta applicati.
+ *
+ * Era una copia della regola e sbagliava il pezzo piu' silenzioso: non passava
+ * lo scenario della riga, e getEffectiveCommessaDates in quel caso ripiega su
+ * quello ATTIVO. Finche' si guarda lo scenario a cui la riga appartiene i due
+ * coincidono e non si vede niente; appena divergono, la tabella mostra le date
+ * di un altro scenario senza dirlo. E' la stessa famiglia sistemata nella
+ * 1.0.93, sopravvissuta in questo punto.
+ *
+ * Ora delega a risolviDateEffettiveCorrenti, che lo scenario lo passa sempre
+ * (`alloc.scenarioId ?? null`). Per le righe non agganciate restituisce le date
+ * salvate invece di null: chi chiama passa da _fmtDateCell, che la data
+ * effettiva la usa solo sui lati agganciati, quindi a video non cambia un pixel.
+ */
 function _effDates(alloc) {
-    if (!alloc.aggancioInizio && !alloc.aggancioFine) return { di: null, df: null };
-    const eff = _ctx.getEffectiveCommessaDates(alloc.codiceCommessa);
-    const applyDelta = (ym, delta) => (delta && ym) ? addMonths(ym, delta) : ym;
-    return {
-        di: alloc.aggancioInizio ? applyDelta(eff?.dataInizio || null, alloc.deltaInizio || 0) : null,
-        df: alloc.aggancioFine   ? applyDelta(eff?.dataFine   || null, alloc.deltaFine  || 0) : null,
-    };
+    return risolviDateEffettiveCorrenti(alloc);
 }
 
 function _updateMagnetButtons() {
