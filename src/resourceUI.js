@@ -2972,6 +2972,20 @@ function _openAllocModal(allocId, defaultPersonaId) {
     if (chkDf) chkDf.checked = alloc?.aggancioFine || false;
     const diDelta = $('#res-delta-di'); if (diDelta) diDelta.value = alloc?.deltaInizio || 0;
     const dfDelta = $('#res-delta-df'); if (dfDelta) dfDelta.value = alloc?.deltaFine   || 0;
+
+    // Su un campo agganciato la data salvata e' un residuo: resta quella che la
+    // commessa aveva quando la riga e' stata creata o copiata, e dopo uno
+    // slittamento dello scenario non c'entra piu' con il mese in cui si lavora
+    // davvero. Mostrarla nel campo piu' grande della finestra, con l'anticipo a
+    // 0 e il mese vero in grigio sotto, faceva leggere un anticipo sbagliato:
+    // chi correggeva il numero per far tornare la data spostava l'allocazione
+    // senza volerlo, perche' il delta riparte dalla commessa, non dal campo.
+    // Qui il campo viene riallineato alla calamita, cosi' campo, anticipo e
+    // suggerimento dicono tutti lo stesso mese. Va DOPO i delta: _dataAgganciata
+    // li legge dal DOM.
+    if (chkDi?.checked) { const d = _dataAgganciata('di'); if (d) $('#res-alloc-di').value = d; }
+    if (chkDf?.checked) { const d = _dataAgganciata('df'); if (d) $('#res-alloc-df').value = d; }
+
     _updateMagnetButtons();
 
     _updateAllocPreview();
@@ -3023,33 +3037,45 @@ function _modalScenarioId() {
     return val;
 }
 
-function _updateDeltaHint(field) {
+/**
+ * Il mese che un campo agganciato deve mostrare: la data della commessa NELLO
+ * SCENARIO della finestra, piu' l'anticipo/posticipo. null quando non c'e'
+ * abbastanza per calcolarlo (nessuna commessa scelta, o commessa senza mesi
+ * con VDP in quello scenario).
+ *
+ * Il delta si conta SEMPRE dalla data della commessa, mai da quella scritta nel
+ * campo: e' il punto che la finestra non riusciva a far capire.
+ *
+ * Sta qui e in nessun altro posto perche' la stessa somma serve in tre punti —
+ * il pulsante calamita, il suggerimento "→ mese" e il popolamento in modifica.
+ * E' la lezione gia' pagata sulle date effettive: copie sparse della stessa
+ * formula divergono, e la divergenza non si vede finche' non fa danni.
+ */
+function _dataAgganciata(field) {
     const codice = $('#res-alloc-commessa')?.value;
-    const agganciato = $(`#chk-aggancio-${field}`)?.checked;
-    const hint = $(`#res-delta-${field}-hint`);
-    if (!hint) return;
-    if (!agganciato || !codice) { hint.textContent = ''; return; }
+    if (!codice) return null;
     const eff = _ctx.getEffectiveCommessaDates(codice, _modalScenarioId());
     const base = field === 'di' ? eff?.dataInizio : eff?.dataFine;
-    if (!base) { hint.textContent = ''; return; }
+    if (!base) return null;
     const delta = parseInt($(`#res-delta-${field}`)?.value) || 0;
-    const risultante = delta ? addMonths(base, delta) : base;
-    hint.textContent = `→ ${formatYM(risultante)}`;
+    return delta ? addMonths(base, delta) : base;
+}
+
+function _updateDeltaHint(field) {
+    const hint = $(`#res-delta-${field}-hint`);
+    if (!hint) return;
+    const risultante = $(`#chk-aggancio-${field}`)?.checked ? _dataAgganciata(field) : null;
+    hint.textContent = risultante ? `→ ${formatYM(risultante)}` : '';
 }
 
 function _applyMagnet(field) {
-    const codice = $('#res-alloc-commessa')?.value;
-    if (!codice) return;
-    const eff = _ctx.getEffectiveCommessaDates(codice, _modalScenarioId());
-    if (!eff) return;
-    const delta = parseInt($(`#res-delta-${field}`)?.value) || 0;
+    const nuova = _dataAgganciata(field);
+    if (!nuova) return;
     if (field === 'di') {
-        const base = eff.dataInizio || '';
-        $('#res-alloc-di').value = delta ? addMonths(base, delta) : base;
+        $('#res-alloc-di').value = nuova;
         $('#chk-aggancio-di').checked = true;
     } else {
-        const base = eff.dataFine || '';
-        $('#res-alloc-df').value = delta ? addMonths(base, delta) : base;
+        $('#res-alloc-df').value = nuova;
         $('#chk-aggancio-df').checked = true;
     }
     _updateMagnetButtons();
