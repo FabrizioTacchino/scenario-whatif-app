@@ -59,6 +59,17 @@ function _isPersonaAttiva(p) {
     return p.dataTermine.slice(0, 7) >= oggi;
 }
 
+// In forza = non cessata E già entrata in azienda.
+// Esclude quindi le persone da ricercare e le assunzioni con inizio futuro.
+function _isPersonaInForza(p, mese) {
+    if (!p) return false;
+    const m = mese || new Date().toISOString().slice(0, 7);
+    if (p.dataTermine && p.dataTermine.slice(0, 7) < m) return false;
+    const da = p.dataAssunzione ? p.dataAssunzione.slice(0, 7) : null;
+    if (da && da > m) return false;
+    return true;
+}
+
 // ─── Internal state ──────────────────────────────────────────
 let _currentSubTab = 'persone';
 let _selectedPersonaId = null;
@@ -403,7 +414,7 @@ function _renderPersone() {
     // Apply status filter from KPI clicks
     const _meseOggi = new Date().toISOString().slice(0, 7);
     if (_personaStatusFilter === 'attive') {
-        filtered = filtered.filter(p => !p.dataTermine || p.dataTermine.slice(0, 7) >= _meseOggi);
+        filtered = filtered.filter(p => _isPersonaInForza(p, _meseOggi));
     } else if (_personaStatusFilter === 'scadenza') {
         filtered = filtered.filter(p => p.dataTermine && p.dataTermine.slice(0, 7) >= _meseOggi);
     } else if (_personaStatusFilter === 'cessate') {
@@ -425,7 +436,7 @@ function _renderPersone() {
     const inScadenza = persone.filter(p => p.dataTermine && p.dataTermine.slice(0, 7) >= meseCorrente).length;
     const numIngresso = persone.filter(p => p.statoAssunzione === 'in_ingresso' && p.dataAssunzione?.slice(0, 7) > meseCorrente).length;
     const numRicercare = persone.filter(p => p.statoAssunzione === 'da_ricercare' && p.dataAssunzione?.slice(0, 7) > meseCorrente).length;
-    const attive = totale - cessate;
+    const attive = persone.filter(p => _isPersonaInForza(p, meseCorrente)).length;
     const prossimaScadenza = persone
         .filter(p => p.dataTermine && p.dataTermine.slice(0, 7) >= meseCorrente)
         .map(p => p.dataTermine.slice(0, 7))
@@ -436,6 +447,7 @@ function _renderPersone() {
         switch (_personaSortCol) {
             case 'cognome':   return `${p.cognome} ${p.nome}`.toLowerCase();
             case 'ruolo':     return (p.ruolo || '').toLowerCase();
+            case 'societa':   return (p.societa || '').toLowerCase();
             case 'bu':        return (p.bu || '').toLowerCase();
             case 'contratto': return (p.tipoContratto || '').toLowerCase();
             case 'costo':       return p.costoMedioMese || 0;
@@ -521,6 +533,7 @@ function _renderPersone() {
                 <thead><tr>
                     ${thSort('cognome', 'Cognome e Nome')}
                     ${thSort('ruolo', 'Ruolo')}
+                    ${thSort('societa', 'Società')}
                     ${thSort('bu', 'BU / CDC')}
                     ${thSort('contratto', 'Contratto')}
                     ${thSort('assunzione', 'Data Inizio')}
@@ -538,6 +551,7 @@ function _renderPersone() {
                                 ${p.codiceFiscale ? `<div class="res-person-cf">${p.codiceFiscale}</div>` : ''}
                             </td>
                             <td>${p.ruolo || '<span class="text-muted">—</span>'}</td>
+                            <td>${p.societa || '<span class="text-muted">—</span>'}</td>
                             <td>
                                 ${p.bu ? `<span class="res-badge bu">${p.bu}</span>` : ''}
                                 ${p.cdc ? `<div class="res-cdc-text">${p.cdc}</div>` : ''}
@@ -573,7 +587,7 @@ function _renderPersone() {
                         </tr>
                         ${_selectedPersonaId === p.id ? `
                             <tr class="res-detail-row">
-                                <td colspan="10">${_buildPersonaDetail(p, scenarioId)}</td>
+                                <td colspan="11">${_buildPersonaDetail(p, scenarioId)}</td>
                             </tr>
                         ` : ''}
                     `).join('')}
@@ -2960,7 +2974,7 @@ function _openAllocModal(allocId, defaultPersonaId) {
         '#res-alloc-commessa-search',
         '#res-alloc-commessa-list',
         commesse,
-        id => { $('#res-alloc-commessa').value = id || ''; _updateDeltaHint('di'); _updateDeltaHint('df'); },
+        id => { $('#res-alloc-commessa').value = id || ''; _riagganciaDopoCambioCommessa(); },
         id => { const c = commesse.find(x => x.codice === id); return c ? `${c.codice} — ${c.nome}` : ''; }
     );
 
@@ -3088,9 +3102,37 @@ function _updateDeltaHint(field) {
     hint.textContent = risultante ? `→ ${formatYM(risultante)}` : '';
 }
 
-function _applyMagnet(field) {
+// Cambiata la commessa, una data agganciata deve seguire la NUOVA commessa:
+// se restasse quella di prima sarebbe un residuo, cioè il mese sbagliato
+// mostrato come se fosse giusto.
+function _riagganciaDopoCambioCommessa() {
+    if ($('#chk-aggancio-di')?.checked) _applyMagnet('di');
+    if ($('#chk-aggancio-df')?.checked) _applyMagnet('df');
+    _updateDeltaHint('di');
+    _updateDeltaHint('df');
+}
+
+// auto = chiamata automatica (si sta digitando nell'anticipo): se non c'è una
+// data a cui agganciarsi non tocca la spunta e non parla, come prima.
+function _applyMagnet(field, auto) {
     const nuova = _dataAgganciata(field);
-    if (!nuova) return;
+    const err = $('#res-alloc-error');
+    if (!nuova) {
+        if (auto) return;
+        // Niente a cui agganciarsi: lo diciamo. Prima non succedeva nulla, in
+        // silenzio, e il salvataggio si fermava poi su "Date obbligatorie".
+        const chk = $(`#chk-aggancio-${field}`);
+        if (chk) chk.checked = false;
+        if (err) {
+            const codice = $('#res-alloc-commessa')?.value;
+            err.textContent = codice
+                ? `${codice} non ha VDP in questo scenario: non c'è una data a cui agganciarsi. Imposta la data a mano.`
+                : 'Seleziona prima una commessa.';
+        }
+        _updateMagnetButtons();
+        return;
+    }
+    if (err && !auto) err.textContent = '';
     if (field === 'di') {
         $('#res-alloc-di').value = nuova;
         $('#chk-aggancio-di').checked = true;
@@ -3430,10 +3472,13 @@ function _setupModals() {
     $('#res-alloc-scenario-modal')?.addEventListener('change', () => { _checkAllocSat(); _updateDeltaHint('di'); _updateDeltaHint('df'); });
     $('#btn-magnet-di')?.addEventListener('click', () => _applyMagnet('di'));
     $('#btn-magnet-df')?.addEventListener('click', () => _applyMagnet('df'));
-    $('#chk-aggancio-di')?.addEventListener('change', _updateMagnetButtons);
-    $('#chk-aggancio-df')?.addEventListener('change', _updateMagnetButtons);
-    $('#res-delta-di')?.addEventListener('input', () => { _updateDeltaHint('di'); if ($('#chk-aggancio-di')?.checked) _applyMagnet('di'); });
-    $('#res-delta-df')?.addEventListener('input', () => { _updateDeltaHint('df'); if ($('#chk-aggancio-df')?.checked) _applyMagnet('df'); });
+    // La spunta "mantieni agganciato" deve riempire il campo data come fa il
+    // bottone calamita: prima marcava l'aggancio lasciando il campo vuoto, e il
+    // salvataggio si fermava su "Date obbligatorie" senza spiegare perché.
+    $('#chk-aggancio-di')?.addEventListener('change', e => { if (e.target.checked) _applyMagnet('di'); else _updateMagnetButtons(); });
+    $('#chk-aggancio-df')?.addEventListener('change', e => { if (e.target.checked) _applyMagnet('df'); else _updateMagnetButtons(); });
+    $('#res-delta-di')?.addEventListener('input', () => { _updateDeltaHint('di'); if ($('#chk-aggancio-di')?.checked) _applyMagnet('di', true); });
+    $('#res-delta-df')?.addEventListener('input', () => { _updateDeltaHint('df'); if ($('#chk-aggancio-df')?.checked) _applyMagnet('df', true); });
 
     // Copy alloc modal
     $('#res-copy-alloc-modal-close')?.addEventListener('click', () => _closeModal('res-copy-alloc-modal'));
