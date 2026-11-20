@@ -18,6 +18,7 @@ import { renameCommessaCodice, listPersone, listAllocazioni, deleteAllocazioniSc
 import { safeSetItem, trackChanges, onStorageError, getStorageUsage } from './storage.js';
 import * as notify from './notify.js';
 import { registraRinomina, rilevaCodiciSuperati, pushRinomineToCloud, pullRinomineFromCloud } from './commesseRinominate.js';
+import { PAESI, listaPaesi, getPaese, setMappa, rinominaPaese, codiciDaAssegnare, pullPaesiFromCloud, pushPaesiToCloud } from './commessePaese.js';
 import { computeResourceMatrix, computeResourceKpis } from './resourceEngine.js';
 import { generateReport } from './reportGenerator.js';
 import { supabase, signIn, signUp, signOut, getSession, onAuthStateChange, getUserRole, listUsers, updateUserRole } from './supabaseClient.js';
@@ -109,6 +110,8 @@ function _applicaEsitoSync(result) {
         // Lo storico rinomine serve anche a chi non ha eseguito la rinomina:
         // e' lui che potrebbe ricaricare un file AOP rimasto indietro.
         pullRinomineFromCloud().catch(() => { /* best effort */ });
+        // Il paese delle commesse lo decide l'admin: agli altri arriva di qui.
+        pullPaesiFromCloud().catch(() => { /* best effort */ });
     }
 }
 
@@ -287,6 +290,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         ['download grafici', setupChartDownloads], ['confronto scenari', setupScenarioCompareTab],
         ['accesso cloud', setupCloudAuth],
         ['rinomina commessa', _setupAdminRinomina],
+        ['paese commesse', _setupAdminPaesi],
     ];
     for (const [nome, fn] of _avvii) {
         try { fn(); }
@@ -739,6 +743,7 @@ function setupCloudAuth() {
                 _loadAdminUserList();
                 _loadMinVersion();
                 _caricaElencoRinomina();
+                _aggiornaRiepilogoPaesi();
             } else {
                 $('#cloud-admin-panel')?.classList.add('hidden');
             }
@@ -1384,6 +1389,8 @@ function populateFilters() {
         settoreContainer.appendChild(btn);
     }
 
+    _popolaChipPaese();
+
     // Type chips — statici in HTML, nessun listener diretto (usa delegation)
     // Non serve fare nulla: il click è gestito da setupFilterEvents una volta sola.
 
@@ -1395,6 +1402,7 @@ function populateFilters() {
         btn.className = 'filter-chip';
         btn.dataset.value = c.key;
         btn.dataset.settore = c.settore;
+        btn.dataset.codice = c.codice;
         btn.dataset.type = c.type;
         btn.dataset.search = `${c.codice} ${c.nome}`.toLowerCase();
         btn.textContent = `${c.codice} — ${c.nome}`;
@@ -1444,10 +1452,16 @@ function getActiveFilters() {
     const settore = Array.from($$('#filter-settore .filter-chip.active')).map(b => b.dataset.value);
     const types = Array.from($$('#filter-type .filter-chip.active')).map(b => b.dataset.value);
     const commesse = Array.from($$('#filter-commessa .filter-chip.active')).map(b => b.dataset.value);
+    const paesi = Array.from($$('#filter-paese .filter-chip.active')).map(b => b.dataset.value);
     return {
         settori: settore,
         types: types,
         commesse: commesse,
+        paesi: paesi,
+        // Istantanea della mappa paesi: i punti che filtrano leggono qui, cosi'
+        // le commesse restano come sono e nessuno deve importare il modulo.
+        // Letta solo quando serve: questa funzione gira a ogni ridisegno.
+        paeseByCodice: paesi.length ? listaPaesi() : null,
         dateFrom: $('#filter-date-from').value || null,
         dateTo: $('#filter-date-to').value || null,
         probFrom: _leggiLimiteProb('#filter-prob-from'),   // percento, null = nessun limite
@@ -1464,6 +1478,25 @@ function setupFilterEvents() {
         const chip = e.target.closest('.filter-chip');
         if (!chip) return;
         chip.classList.toggle('active');
+        filterSidebarCommesse();
+        refreshDashboard();
+        if (document.querySelector('.tab-btn.active')?.dataset.tab === 'risorse') renderResourceTab();
+    });
+
+    $('#filter-paese')?.addEventListener('click', (e) => {
+        const chip = e.target.closest('.filter-chip');
+        if (!chip) return;
+        chip.classList.toggle('active');
+        filterSidebarCommesse();
+        refreshDashboard();
+        if (document.querySelector('.tab-btn.active')?.dataset.tab === 'risorse') renderResourceTab();
+    });
+
+    // La mappa e' cambiata: tabella admin, oppure pull dal cloud di un altro.
+    // Qui NON si chiama populateFilters: quella azzera anche le date scelte.
+    window.addEventListener('whatif:commessePaeseChanged', () => {
+        if (!appData) return;
+        _popolaChipPaese();
         filterSidebarCommesse();
         refreshDashboard();
         if (document.querySelector('.tab-btn.active')?.dataset.tab === 'risorse') renderResourceTab();
@@ -2107,6 +2140,7 @@ function _gestioneAction(action, localId, scenName, cloudScenData) {
 // ============================================================
 function filterSidebarCommesse() {
     const activeSettori = Array.from($$('#filter-settore .filter-chip.active')).map(b => b.dataset.value);
+    const activePaesi = Array.from($$('#filter-paese .filter-chip.active')).map(b => b.dataset.value);
     const activeTypes = Array.from($$('#filter-type .filter-chip.active')).map(b => b.dataset.value);
     const searchQuery = ($('#commessa-search')?.value || '').toLowerCase().trim();
 
@@ -2115,6 +2149,11 @@ function filterSidebarCommesse() {
 
         // Filter by settore
         if (activeSettori.length && !activeSettori.includes(chip.dataset.settore)) {
+            visible = false;
+        }
+
+        // Filter by paese
+        if (activePaesi.length && !activePaesi.includes(getPaese(chip.dataset.codice))) {
             visible = false;
         }
 
@@ -3952,6 +3991,8 @@ function renderAssumptionsTable() {
     for (const comm of rowsForTable) {
         // Sector Filter
         if (filters.settori && filters.settori.length && !filters.settori.includes(comm.settore)) continue;
+        // Paese Filter
+        if (filters.paesi && filters.paesi.length && !filters.paesi.includes((filters.paeseByCodice || {})[comm.codice] || '')) continue;
         // Type Filter — use effective type (respects scenario override)
         const effectiveTypeForAssumptions = (inputs[comm.key] || {}).type || comm.type;
         if (filters.types && filters.types.length && !filters.types.includes(effectiveTypeForAssumptions)) continue;
@@ -4754,6 +4795,7 @@ function applyGlobal(type, field, value) {
     const filters = getActiveFilters();
     for (const c of filtered) {
         if (filters.settori.length && !filters.settori.includes(c.settore)) continue;
+        if (filters.paesi && filters.paesi.length && !filters.paesi.includes((filters.paeseByCodice || {})[c.codice] || '')) continue;
         if (filters.commesse.length && !filters.commesse.includes(c.key)) continue;
         updateScenarioInput(activeScenarioId, c.key, { [field]: value });
     }
@@ -5271,6 +5313,134 @@ function _setupAdminRinomina() {
     });
 }
 
+// --- Paese delle commesse (admin) ----------------------------
+//
+// La mappa vera sta in commessePaese.js. Qui c'e' solo la tabella per
+// compilarla. Si lavora su una bozza e si salva in blocco: cambiare paese a
+// venti commesse non deve voler dire venti scritture sul cloud.
+
+let _paesiBozza = null;
+
+function _popolaChipPaese() {
+    const cont = $('#filter-paese');
+    if (!cont) return;
+    // I chip si rifanno: le selezioni in corso vanno conservate a mano.
+    const attivi = new Set(Array.from(cont.querySelectorAll('.filter-chip.active')).map(b => b.dataset.value));
+    cont.innerHTML = '';
+    for (const p of PAESI) {
+        const btn = document.createElement('button');
+        btn.className = 'filter-chip' + (attivi.has(p) ? ' active' : '');
+        btn.dataset.value = p;
+        btn.textContent = p;
+        cont.appendChild(btn);
+    }
+    // "Da assegnare" esiste perche' una commessa nuova arriva senza paese: va
+    // vista, non fatta sparire da un totale che nessuno sa incompleto.
+    const mancanti = codiciDaAssegnare(appData?.commesse || []).length;
+    const nd = document.createElement('button');
+    nd.className = 'filter-chip' + (attivi.has('') ? ' active' : '');
+    nd.dataset.value = '';
+    nd.textContent = mancanti ? 'Da assegnare (' + mancanti + ')' : 'Da assegnare';
+    cont.appendChild(nd);
+}
+
+function _aggiornaRiepilogoPaesi() {
+    const el = $('#admin-paesi-riepilogo');
+    if (!el) return;
+    const commesse = appData?.commesse || [];
+    if (!commesse.length) { el.textContent = ''; return; }
+    const mancanti = codiciDaAssegnare(commesse).length;
+    el.textContent = mancanti
+        ? mancanti + ' di ' + commesse.length + ' senza paese'
+        : 'tutte assegnate (' + commesse.length + ')';
+}
+
+function _commessePaesiFiltrate() {
+    const q = ($('#paesi-search')?.value || '').toLowerCase().trim();
+    const tutte = appData?.commesse || [];
+    if (!q) return tutte;
+    return tutte.filter(c => (c.codice + ' ' + c.nome).toLowerCase().includes(q));
+}
+
+function _aggiornaConteggioPaesi() {
+    const el = $('#paesi-conteggio');
+    if (!el) return;
+    const tutte = appData?.commesse || [];
+    const senza = tutte.filter(c => !PAESI.includes(_paesiBozza?.[c.codice])).length;
+    el.textContent = _commessePaesiFiltrate().length + ' di ' + tutte.length + ' mostrate, ' + senza + ' senza paese';
+}
+
+function _renderTabellaPaesi() {
+    const tbody = $('#paesi-tbody');
+    if (!tbody || !_paesiBozza) return;
+    tbody.innerHTML = _commessePaesiFiltrate().map(c => {
+        const scelto = _paesiBozza[c.codice] || '';
+        const opzioni = ['<option value=""' + (scelto ? '' : ' selected') + '>-- da assegnare --</option>']
+            .concat(PAESI.map(p => '<option value="' + p + '"' + (scelto === p ? ' selected' : '') + '>' + p + '</option>'))
+            .join('');
+        return '<tr><td><strong>' + c.codice + '</strong></td><td>' + c.nome +
+            '</td><td><select class="paesi-sel" data-codice="' + c.codice +
+            '" style="width:100%;padding:3px 6px;font-size:12px;border:1px solid var(--border);border-radius:4px;background:var(--bg-2);color:var(--text);">' +
+            opzioni + '</select></td></tr>';
+    }).join('');
+    _aggiornaConteggioPaesi();
+}
+
+function _setupAdminPaesi() {
+    $('#btn-admin-paesi')?.addEventListener('click', () => {
+        if (!appData?.commesse?.length) {
+            notify.errore('Nessuna commessa caricata: apri prima un file AOP.');
+            return;
+        }
+        _paesiBozza = Object.assign({}, listaPaesi());
+        const s = $('#paesi-search'); if (s) s.value = '';
+        const e = $('#paesi-errore'); if (e) e.textContent = '';
+        // Come per la rinomina: la finestra del cloud va chiusa, altrimenti
+        // questa le si aprirebbe sopra.
+        closeModal('cloud-auth-modal');
+        _renderTabellaPaesi();
+        openModal('paesi-modal');
+    });
+
+    $('#paesi-modal-close')?.addEventListener('click', () => closeModal('paesi-modal'));
+    $('#paesi-search')?.addEventListener('input', _renderTabellaPaesi);
+
+    // Non si ridisegna la tabella a ogni scelta: si perderebbe la tendina
+    // aperta sotto le dita. Cambia solo il conteggio.
+    $('#paesi-tbody')?.addEventListener('change', (ev) => {
+        const sel = ev.target.closest('.paesi-sel');
+        if (!sel || !_paesiBozza) return;
+        if (sel.value) _paesiBozza[sel.dataset.codice] = sel.value;
+        else delete _paesiBozza[sel.dataset.codice];
+        _aggiornaConteggioPaesi();
+    });
+
+    $$('.paesi-bulk').forEach(b => {
+        b.addEventListener('click', () => {
+            if (!_paesiBozza) return;
+            // Solo le righe mostrate: e' il senso della scritta accanto.
+            for (const c of _commessePaesiFiltrate()) _paesiBozza[c.codice] = b.dataset.paese;
+            _renderTabellaPaesi();
+        });
+    });
+
+    $('#btn-paesi-salva')?.addEventListener('click', async () => {
+        const err = $('#paesi-errore');
+        if (err) err.textContent = '';
+        if (!_paesiBozza) return;
+        setMappa(_paesiBozza);   // locale + evento: chip e viste si rifanno da sole
+        const esito = await pushPaesiToCloud();
+        _aggiornaRiepilogoPaesi();
+        if (!esito?.ok) {
+            // Salvato qui ma non condiviso: dirlo, invece di chiudere e basta.
+            if (err) err.textContent = 'Salvato su questo PC, ma non condiviso con gli altri: ' + (esito?.errore || 'errore sconosciuto');
+            return;
+        }
+        closeModal('paesi-modal');
+        notify.successo('Paese delle commesse salvato e condiviso.');
+    });
+}
+
 function _scriviJournal(dati) {
     safeSetItem(RINOMINA_JOURNAL_KEY, JSON.stringify(dati));
 }
@@ -5347,6 +5517,11 @@ async function _eseguiRinominaCommessa(oldCodice, oldNome, newCodice, newNome) {
     // Lo storico serve a riconoscere, fra mesi, un file AOP rimasto indietro.
     registraRinomina({ oldCodice, oldNome, newCodice, newNome, chi: _currentUserEmail || '' });
     pushRinomineToCloud().catch(() => { /* best effort: non blocca la rinomina */ });
+
+    // Il paese e' agganciato al codice: se non lo spostiamo qui, la commessa
+    // rinominata esce dal filtro e nessuno se ne accorge guardando un totale.
+    rinominaPaese(oldCodice, newCodice);
+    pushPaesiToCloud().catch(() => { /* best effort */ });
 
     _avviaControlloRinomina(oldCodice, newCodice);
 

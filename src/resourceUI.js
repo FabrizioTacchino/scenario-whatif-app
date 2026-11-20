@@ -1088,6 +1088,12 @@ function _renderCommessaDetail(scenarioId, commesse, selectedCommesse = [], date
             globalFilters.settori.includes(c.settore || '')
         );
     }
+    if (globalFilters.paesi && globalFilters.paesi.length) {
+        const perCodice = globalFilters.paeseByCodice || {};
+        commesseDaRender = commesseDaRender.filter(c =>
+            globalFilters.paesi.includes(perCodice[c.codice] || '')
+        );
+    }
     if (globalFilters.types && globalFilters.types.length) {
         commesseDaRender = commesseDaRender.filter(c => {
             const tipo = c.effectiveType || c.tipo || c.type || 'Backlog';

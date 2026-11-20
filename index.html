@@ -298,6 +298,10 @@
         <div id="filter-settore" class="filter-chips"></div>
       </div>
       <div class="filter-group">
+        <label>Paese</label>
+        <div id="filter-paese" class="filter-chips"></div>
+      </div>
+      <div class="filter-group">
         <label>Tipo</label>
         <div id="filter-type" class="filter-chips">
           <button class="filter-chip" data-value="Backlog">Backlog</button>
@@ -1388,6 +1392,38 @@
   </div>
 
   <!-- ── RISORSE: COPIA ALLOCAZIONI MODAL ── -->
+  <!-- Paese delle commesse (admin) -->
+  <div id="paesi-modal" class="modal hidden">
+    <div class="modal-backdrop"></div>
+    <div class="modal-content modal-lg">
+      <div class="modal-header">
+        <h2>Paese delle commesse</h2>
+        <button class="modal-close" id="paesi-modal-close">&times;</button>
+      </div>
+      <div class="modal-body" style="display:flex;flex-direction:column;gap:10px;">
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+          <input type="text" id="paesi-search" class="res-search-input" placeholder="Cerca codice o nome…" style="flex:1;min-width:180px;" />
+          <span id="paesi-conteggio" style="font-size:11px;color:var(--text-muted);"></span>
+        </div>
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;font-size:11px;">
+          <span style="color:var(--text-muted);">Assegna a tutte quelle mostrate:</span>
+          <button type="button" class="btn btn-ghost btn-sm paesi-bulk" data-paese="Italia" style="font-size:11px;">Italia</button>
+          <button type="button" class="btn btn-ghost btn-sm paesi-bulk" data-paese="Francia" style="font-size:11px;">Francia</button>
+          <button type="button" class="btn btn-ghost btn-sm paesi-bulk" data-paese="Altro" style="font-size:11px;">Altro</button>
+        </div>
+        <div class="table-container" style="max-height:52vh;overflow:auto;">
+          <table class="res-table">
+            <thead><tr><th style="width:120px;">Codice</th><th>Nome</th><th style="width:140px;">Paese</th></tr></thead>
+            <tbody id="paesi-tbody"></tbody>
+          </table>
+        </div>
+        <p id="paesi-errore" style="color:var(--danger);font-size:12px;margin:0;"></p>
+        <p style="font-size:10px;color:var(--text-muted);margin:0;">Le commesse senza paese restano visibili nel filtro sotto « Da assegnare »: non spariscono dai totali senza dirlo.</p>
+        <button id="btn-paesi-salva" class="btn btn-primary" style="width:100%;">Salva e condividi</button>
+      </div>
+    </div>
+  </div>
+
   <div id="res-copy-alloc-modal" class="modal hidden">
     <div class="modal-backdrop"></div>
     <div class="modal-content modal-sm">
@@ -1574,6 +1610,16 @@
                 <button id="btn-admin-rinomina" class="btn btn-outline btn-sm" style="font-size:11px;white-space:nowrap;">Rinomina…</button>
               </div>
               <p style="font-size:10px;color:var(--text-muted);margin-top:4px;">Aggiorna il codice ovunque insieme: baseline, curva mensile, input e dati importati degli scenari, costi inseriti a mano, fotografie degli scenari bloccati e allocazioni. Da fare quando nessun altro è collegato.</p>
+            </div>
+
+            <!-- Paese commesse (admin) -->
+            <div style="margin-top:14px;border-top:1px solid var(--border);padding-top:10px;">
+              <p style="font-weight:600;font-size:13px;margin-bottom:6px;">Paese commesse</p>
+              <div style="display:flex;gap:6px;align-items:center;">
+                <button id="btn-admin-paesi" class="btn btn-outline btn-sm" style="font-size:11px;white-space:nowrap;">Assegna paese…</button>
+                <span id="admin-paesi-riepilogo" style="font-size:11px;color:var(--text-muted);"></span>
+              </div>
+              <p style="font-size:10px;color:var(--text-muted);margin-top:4px;">Vive fuori dalla baseline: ricaricare il file AOP non lo cancella. Vale per tutti.</p>
             </div>
 
             <!-- Categorie costi (P19) -->

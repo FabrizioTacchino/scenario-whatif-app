@@ -282,6 +282,9 @@ export function computeScenario(commesse, monthlyData, scenario = {}, filters = 
     for (const comm of commesse) {
         // Apply filters
         if (filters.settori && filters.settori.length && !filters.settori.includes(comm.settore)) continue;
+        // Il paese arriva gia' risolto dentro filters: il motore non deve
+        // sapere dove vive la mappa, e le commesse restano come sono.
+        if (filters.paesi && filters.paesi.length && !filters.paesi.includes((filters.paeseByCodice || {})[comm.codice] || '')) continue;
         const effectiveTypeForFilter = (scenarioInputs[comm.key] || {}).type || comm.type;
         if (filters.types && filters.types.length && !filters.types.includes(effectiveTypeForFilter)) continue;
         if (filters.commesse && filters.commesse.length && !filters.commesse.includes(comm.key)) continue;
