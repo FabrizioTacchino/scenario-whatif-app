@@ -2619,6 +2619,7 @@ body {
    "Anagrafica totale" chiude la riga col suo bordo, perche' e' l'unico numero
    che non conta persone in forza ma schede. */
 .res-kpi-primario .res-kpi-val { font-size: 1.6rem; line-height: 1.15; }
+.res-kpi-unita { font-size: .68rem; font-weight: 400; color: var(--text-muted); }
 .res-kpi-totale { border: 1px solid var(--border, rgba(127,127,127,.35)); }
 
 /* Ruoli add row */

@@ -143,6 +143,8 @@ let _econSortDir = 'asc';
 let _resFilterAlloc = 'all'; // 'all' | 'con' | 'senza'
 let _personaStatusFilter = null; // null | 'attive' | 'scadenza' | 'cessate'
 let _personaPaeseFilter = null;  // null | 'Italia' | 'Francia' | 'Altra'
+// "attive" acceso dal clic sul paese e non dall'utente: va spento con lui.
+let _attivePerPaese = false;
 let _capacityCharts = {};   // Chart.js instances for capacity tab
 let _importData = null;
 let _importTipo = 'persone';
@@ -515,10 +517,16 @@ function _renderPersone() {
     // sotto dice quante sono, non si aggiunge al totale.
     const _contaPaese = (nome) => {
         const righe = persone.filter(p => _paesePersona(p) === nome);
+        const inForza = righe.filter(p => _isPersonaInForza(p, meseCorrente));
         return {
             totale: righe.length,
-            inForza: righe.filter(p => _isPersonaInForza(p, meseCorrente)).length,
-            pIva: righe.filter(_isPIva).length,
+            inForza: inForza.length,
+            // Il "di cui" si conta dentro il numero che la cella mostra - le
+            // persone in forza - non sull'anagrafica: altrimenti e' il di cui
+            // di un numero scritto piccolo sotto. In Italia fa 4 e non 5: la
+            // quinta e' una posizione ancora da coprire, e infatti ricompare
+            // nel "di cui P. IVA" di "Da ricercare".
+            pIva: inForza.filter(_isPIva).length,
         };
     };
     const kpiItalia = _contaPaese('Italia');
@@ -527,8 +535,8 @@ function _renderPersone() {
     const _tilePaese = (nome, k, bordo) => `
             <div class="res-kpi-mini res-kpi-clickable${_personaPaeseFilter === nome ? ' res-kpi-selected' : ''}" data-paese-filter="${nome}" style="border-left:2px solid ${bordo};">
                 <span class="res-kpi-label">${nome}</span>
-                <span class="res-kpi-val">${k.totale}</span>
-                <span class="res-kpi-sub">${k.inForza} in forza</span>
+                <span class="res-kpi-val">${k.inForza} <span class="res-kpi-unita">in forza</span></span>
+                <span class="res-kpi-sub">${k.totale} in anagrafica</span>
                 <span class="res-kpi-sub">di cui P. IVA ${k.pIva}</span>
             </div>`;
     const prossimaScadenza = scadenze.length ? scadenze[0].dataTermine.slice(0, 7) : null;
@@ -621,8 +629,8 @@ function _renderPersone() {
             ${prossimaScadenza ? `<div class="res-kpi-mini warning">
                 <span class="res-kpi-label">Prossima scadenza</span>
                 <span class="res-kpi-val">${formatYM(prossimaScadenza)}</span>
-                ${nomiProssimi.slice(0, 2).map(p => `<span class="res-kpi-sub">${p.cognome} ${p.nome}</span>`).join('')}
-                ${nomiProssimi.length > 2 ? `<span class="res-kpi-sub">+${nomiProssimi.length - 2} altre</span>` : ''}
+                ${(nomiProssimi.length > 2 ? nomiProssimi.slice(0, 1) : nomiProssimi).map(p => `<span class="res-kpi-sub">${p.cognome} ${p.nome}</span>`).join('')}
+                ${nomiProssimi.length > 2 ? `<span class="res-kpi-sub">+${nomiProssimi.length - 1} altre</span>` : ''}
             </div>` : ''}
             <div class="res-kpi-mini res-kpi-totale res-kpi-clickable${_personaStatusFilter === null && _personaPaeseFilter === null ? ' res-kpi-selected' : ''}" data-status-filter="">
                 <span class="res-kpi-label">Anagrafica totale</span>
@@ -716,14 +724,28 @@ function _renderPersone() {
     panel.querySelectorAll('.res-kpi-clickable').forEach(el => {
         el.addEventListener('click', () => {
             // I riquadri paese hanno un filtro loro, che convive con lo stato.
+            // La cella del paese mostra le persone in forza, quindi cliccandola
+            // devono uscire quelle righe. Ma se uno stato lo avevi gia' scelto
+            // tu - "In entrata" per vedere chi arriva in Francia, per dire -
+            // comanda il tuo: il paese si aggiunge, non sostituisce.
             if (el.dataset.paeseFilter !== undefined) {
                 const paese = el.dataset.paeseFilter || null;
-                _personaPaeseFilter = (_personaPaeseFilter === paese) ? null : paese;
+                const spento = _personaPaeseFilter === paese;
+                _personaPaeseFilter = spento ? null : paese;
+                if (spento) {
+                    if (_attivePerPaese) _personaStatusFilter = null;
+                    _attivePerPaese = false;
+                } else {
+                    _attivePerPaese = _personaStatusFilter === null;
+                    if (_attivePerPaese) _personaStatusFilter = 'attive';
+                }
                 _renderPersone();
                 return;
             }
             const val = el.dataset.statusFilter || null;
             _personaStatusFilter = (_personaStatusFilter === val) ? null : val;
+            // Lo stato scelto a mano smette di essere "acceso dal paese".
+            _attivePerPaese = false;
             // "Anagrafica totale" rimette tutto, paese compreso: direbbe 124 e
             // la tabella ne mostrerebbe 112, col paese acceso da un clic prima.
             if (!val) _personaPaeseFilter = null;
