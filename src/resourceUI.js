@@ -59,15 +59,35 @@ function _isPersonaAttiva(p) {
     return p.dataTermine.slice(0, 7) >= oggi;
 }
 
+/**
+ * La classe di una persona in un dato mese, e una sola: cessata, da ricercare,
+ * in ingresso, in entrata, attiva. Essendo una sola, le voci del riepilogo
+ * coprono tutta l'anagrafica e non si sovrappongono per costruzione, non per
+ * coincidenza: e' il motivo per cui esiste questa funzione al posto di cinque
+ * filtri scritti a mano, che possono lasciare scoperto un caso senza che
+ * nessuno se ne accorga - ed e' esattamente quello che era successo.
+ *
+ * L'ordine conta: chi e' cessato lo e' comunque, anche se gli fosse rimasta
+ * addosso una data di inizio futura.
+ */
+function _classePersona(p, mese) {
+    if (!p) return null;
+    const m = mese || new Date().toISOString().slice(0, 7);
+    const dt = p.dataTermine ? p.dataTermine.slice(0, 7) : null;
+    if (dt && dt < m) return 'cessate';
+    const da = p.dataAssunzione ? p.dataAssunzione.slice(0, 7) : null;
+    if (da && da > m) {
+        if (p.statoAssunzione === 'da_ricercare') return 'ricercare';
+        if (p.statoAssunzione === 'in_ingresso') return 'ingresso';
+        return 'entrata';
+    }
+    return 'attive';
+}
+
 // In forza = non cessata E già entrata in azienda.
 // Esclude quindi le persone da ricercare e le assunzioni con inizio futuro.
 function _isPersonaInForza(p, mese) {
-    if (!p) return false;
-    const m = mese || new Date().toISOString().slice(0, 7);
-    if (p.dataTermine && p.dataTermine.slice(0, 7) < m) return false;
-    const da = p.dataAssunzione ? p.dataAssunzione.slice(0, 7) : null;
-    if (da && da > m) return false;
-    return true;
+    return _classePersona(p, mese) === 'attive';
 }
 
 /**
@@ -98,11 +118,7 @@ function _isPIva(p) {
  * quindi una data di inizio futura finisce qui per forza, non per distrazione.
  */
 function _isInEntrata(p, mese) {
-    if (!p) return false;
-    const m = mese || new Date().toISOString().slice(0, 7);
-    const da = p.dataAssunzione ? p.dataAssunzione.slice(0, 7) : null;
-    if (!da || da <= m) return false;
-    return p.statoAssunzione !== 'in_ingresso' && p.statoAssunzione !== 'da_ricercare';
+    return _classePersona(p, mese) === 'entrata';
 }
 
 // ─── Internal state ──────────────────────────────────────────
@@ -449,18 +465,14 @@ function _renderPersone() {
 
     // Apply status filter from KPI clicks
     const _meseOggi = new Date().toISOString().slice(0, 7);
-    if (_personaStatusFilter === 'attive') {
-        filtered = filtered.filter(p => _isPersonaInForza(p, _meseOggi));
-    } else if (_personaStatusFilter === 'scadenza') {
+    // "In scadenza" e' l'unica voce che non e' una classe: sono persone gia'
+    // contate in "Attive" che hanno una data di fine davanti. Tutte le altre
+    // chiedono alla stessa regola che fa i conteggi, cosi' il numero scritto
+    // nel riquadro e le righe che escono cliccandolo restano lo stesso numero.
+    if (_personaStatusFilter === 'scadenza') {
         filtered = filtered.filter(p => p.dataTermine && p.dataTermine.slice(0, 7) >= _meseOggi);
-    } else if (_personaStatusFilter === 'cessate') {
-        filtered = filtered.filter(p => p.dataTermine && p.dataTermine.slice(0, 7) < _meseOggi);
-    } else if (_personaStatusFilter === 'ingresso') {
-        filtered = filtered.filter(p => p.statoAssunzione === 'in_ingresso' && p.dataAssunzione?.slice(0, 7) > _meseOggi);
-    } else if (_personaStatusFilter === 'entrata') {
-        filtered = filtered.filter(p => _isInEntrata(p, _meseOggi));
-    } else if (_personaStatusFilter === 'ricercare') {
-        filtered = filtered.filter(p => p.statoAssunzione === 'da_ricercare' && p.dataAssunzione?.slice(0, 7) > _meseOggi);
+    } else if (_personaStatusFilter) {
+        filtered = filtered.filter(p => _classePersona(p, _meseOggi) === _personaStatusFilter);
     }
 
     // Il filtro paese si somma a quello di stato: "Attive" + "Italia" deve
@@ -473,15 +485,31 @@ function _renderPersone() {
     const allocCounts = {};
     listAllocazioni({ scenarioId }).forEach(a => { allocCounts[a.personaId] = (allocCounts[a.personaId] || 0) + 1; });
 
-    // KPI persone
+    // KPI persone. Una passata sola: ogni persona cade in una classe e una
+    // sola, quindi le voci sommano al totale sempre, e le P. IVA con loro.
     const meseCorrente = new Date().toISOString().slice(0, 7);
     const totale = persone.length;
-    const cessate = persone.filter(p => p.dataTermine && p.dataTermine.slice(0, 7) < meseCorrente).length;
-    const inScadenza = persone.filter(p => p.dataTermine && p.dataTermine.slice(0, 7) >= meseCorrente).length;
-    const numIngresso = persone.filter(p => p.statoAssunzione === 'in_ingresso' && p.dataAssunzione?.slice(0, 7) > meseCorrente).length;
-    const numRicercare = persone.filter(p => p.statoAssunzione === 'da_ricercare' && p.dataAssunzione?.slice(0, 7) > meseCorrente).length;
-    const numEntrata = persone.filter(p => _isInEntrata(p, meseCorrente)).length;
-    const attive = persone.filter(p => _isPersonaInForza(p, meseCorrente)).length;
+    const perClasse = { attive: 0, entrata: 0, ingresso: 0, ricercare: 0, cessate: 0 };
+    const pIvaClasse = { attive: 0, entrata: 0, ingresso: 0, ricercare: 0, cessate: 0 };
+    persone.forEach(p => {
+        const k = _classePersona(p, meseCorrente);
+        perClasse[k]++;
+        if (_isPIva(p)) pIvaClasse[k]++;
+    });
+    const attive = perClasse.attive;
+    const numEntrata = perClasse.entrata;
+    const numIngresso = perClasse.ingresso;
+    const numRicercare = perClasse.ricercare;
+    const cessate = perClasse.cessate;
+    const pIvaTotale = persone.filter(_isPIva).length;
+
+    // Le persone con una fine davanti. Non e' una classe a parte: sono gia'
+    // contate in "Attive". Qui servono anche i nomi, non solo quante sono.
+    const scadenze = persone
+        .filter(p => p.dataTermine && p.dataTermine.slice(0, 7) >= meseCorrente)
+        .sort((a, b) => a.dataTermine.localeCompare(b.dataTermine));
+    const inScadenza = scadenze.length;
+    const pIvaScadenza = scadenze.filter(_isPIva).length;
 
     // Conteggi per paese. Le P. IVA sono dentro il totale del paese: la riga
     // sotto dice quante sono, non si aggiunge al totale.
@@ -503,10 +531,17 @@ function _renderPersone() {
                 <span class="res-kpi-sub">${k.inForza} in forza</span>
                 <span class="res-kpi-sub">di cui P. IVA ${k.pIva}</span>
             </div>`;
-    const prossimaScadenza = persone
-        .filter(p => p.dataTermine && p.dataTermine.slice(0, 7) >= meseCorrente)
-        .map(p => p.dataTermine.slice(0, 7))
-        .sort()[0] || null;
+    const prossimaScadenza = scadenze.length ? scadenze[0].dataTermine.slice(0, 7) : null;
+    // Solo chi scade in quel mese: il mese da solo non dice a chi guardare.
+    const nomiProssimi = scadenze.filter(p => p.dataTermine.slice(0, 7) === prossimaScadenza);
+
+    const _selStato = (v) => (_personaStatusFilter === v ? ' res-kpi-selected' : '');
+    const _cellaStato = (v, etichetta, n, bordo, piva) => `
+            <div class="res-kpi-mini res-kpi-clickable${_selStato(v)}" data-status-filter="${v}" style="border-left:2px solid ${bordo};">
+                <span class="res-kpi-label">${etichetta}</span>
+                <span class="res-kpi-val" style="color:${bordo};">${n}</span>
+                <span class="res-kpi-sub">di cui P. IVA ${piva}</span>
+            </div>`;
 
     // ── Sort ──────────────────────────────────────────────────
     const sortVal = (p) => {
@@ -561,42 +596,39 @@ function _renderPersone() {
             'Aggiungi persone manualmente oppure importa un file Excel per iniziare.',
             'btn-res-add-persona'
         ) : `
-        <div class="res-capacity-kpis" style="margin-bottom:12px;">
-            <div class="res-kpi-mini res-kpi-clickable${_personaStatusFilter === null ? ' res-kpi-selected' : ''}" data-status-filter="">
-                <span class="res-kpi-label">Persone totali</span>
-                <span class="res-kpi-val">${totale}</span>
+        <div class="res-capacity-kpis" style="margin-bottom:20px;">
+            <div class="res-kpi-mini accent res-kpi-primario res-kpi-clickable${_selStato('attive')}" data-status-filter="attive">
+                <span class="res-kpi-label">Attive</span>
+                <span class="res-kpi-val">${attive}</span>
+                <span class="res-kpi-sub">di cui P. IVA ${pIvaClasse.attive}</span>
             </div>
             ${_tilePaese('Italia', kpiItalia, '#22c55e')}
             ${_tilePaese('Francia', kpiFrancia, '#6366f1')}
-            ${kpiAltra.totale > 0 ? _tilePaese('Altra', kpiAltra, '#f59e0b') : ''}
-            <div class="res-kpi-mini accent res-kpi-clickable${_personaStatusFilter === 'attive' ? ' res-kpi-selected' : ''}" data-status-filter="attive">
-                <span class="res-kpi-label">Attive</span>
-                <span class="res-kpi-val">${attive}</span>
-            </div>
-            <div class="res-kpi-mini ${inScadenza > 0 ? 'warning' : ''} res-kpi-clickable${_personaStatusFilter === 'scadenza' ? ' res-kpi-selected' : ''}" data-status-filter="scadenza">
+            ${kpiAltra.totale > 0 ? _tilePaese('Altra', kpiAltra, '#f97316') : ''}
+            ${numEntrata > 0 ? _cellaStato('entrata', 'In entrata', numEntrata, '#14b8a6', pIvaClasse.entrata) : ''}
+            ${numIngresso > 0 ? _cellaStato('ingresso', 'In ingresso', numIngresso, '#3b82f6', pIvaClasse.ingresso) : ''}
+            ${numRicercare > 0 ? _cellaStato('ricercare', 'Da ricercare', numRicercare, '#f59e0b', pIvaClasse.ricercare) : ''}
+            <div class="res-kpi-mini ${inScadenza > 0 ? 'warning' : ''} res-kpi-clickable${_selStato('scadenza')}" data-status-filter="scadenza">
                 <span class="res-kpi-label">In scadenza</span>
                 <span class="res-kpi-val">${inScadenza}</span>
+                <span class="res-kpi-sub">di cui P. IVA ${pIvaScadenza}</span>
             </div>
-            <div class="res-kpi-mini res-kpi-clickable${_personaStatusFilter === 'cessate' ? ' res-kpi-selected' : ''}" data-status-filter="cessate">
+            <div class="res-kpi-mini res-kpi-clickable${_selStato('cessate')}" data-status-filter="cessate">
                 <span class="res-kpi-label">Cessate</span>
                 <span class="res-kpi-val">${cessate}</span>
+                <span class="res-kpi-sub">di cui P. IVA ${pIvaClasse.cessate}</span>
             </div>
-            ${numIngresso > 0 ? `<div class="res-kpi-mini res-kpi-clickable${_personaStatusFilter === 'ingresso' ? ' res-kpi-selected' : ''}" data-status-filter="ingresso" style="border-left:2px solid #3b82f6;">
-                <span class="res-kpi-label">In ingresso</span>
-                <span class="res-kpi-val" style="color:#3b82f6;">${numIngresso}</span>
-            </div>` : ''}
-            ${numEntrata > 0 ? `<div class="res-kpi-mini res-kpi-clickable${_personaStatusFilter === 'entrata' ? ' res-kpi-selected' : ''}" data-status-filter="entrata" style="border-left:2px solid #14b8a6;">
-                <span class="res-kpi-label">In entrata</span>
-                <span class="res-kpi-val" style="color:#14b8a6;">${numEntrata}</span>
-            </div>` : ''}
-            ${numRicercare > 0 ? `<div class="res-kpi-mini res-kpi-clickable${_personaStatusFilter === 'ricercare' ? ' res-kpi-selected' : ''}" data-status-filter="ricercare" style="border-left:2px solid #f59e0b;">
-                <span class="res-kpi-label">Da ricercare</span>
-                <span class="res-kpi-val" style="color:#f59e0b;">${numRicercare}</span>
-            </div>` : ''}
             ${prossimaScadenza ? `<div class="res-kpi-mini warning">
                 <span class="res-kpi-label">Prossima scadenza</span>
                 <span class="res-kpi-val">${formatYM(prossimaScadenza)}</span>
+                ${nomiProssimi.slice(0, 2).map(p => `<span class="res-kpi-sub">${p.cognome} ${p.nome}</span>`).join('')}
+                ${nomiProssimi.length > 2 ? `<span class="res-kpi-sub">+${nomiProssimi.length - 2} altre</span>` : ''}
             </div>` : ''}
+            <div class="res-kpi-mini res-kpi-totale res-kpi-clickable${_personaStatusFilter === null && _personaPaeseFilter === null ? ' res-kpi-selected' : ''}" data-status-filter="">
+                <span class="res-kpi-label">Anagrafica totale</span>
+                <span class="res-kpi-val">${totale}</span>
+                <span class="res-kpi-sub">di cui P. IVA ${pIvaTotale}</span>
+            </div>
         </div>
         <div class="res-count-bar">
             <span>${filtered.length} di ${persone.length} ${persone.length === 1 ? 'persona' : 'persone'}</span>
@@ -692,6 +724,9 @@ function _renderPersone() {
             }
             const val = el.dataset.statusFilter || null;
             _personaStatusFilter = (_personaStatusFilter === val) ? null : val;
+            // "Anagrafica totale" rimette tutto, paese compreso: direbbe 124 e
+            // la tabella ne mostrerebbe 112, col paese acceso da un clic prima.
+            if (!val) _personaPaeseFilter = null;
             _renderPersone();
         });
     });

@@ -2615,6 +2615,11 @@ body {
 .res-kpi-label { font-size: .72rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: .4px; }
 .res-kpi-val   { font-size: 1rem; font-weight: 700; color: var(--text-primary); margin-top: 2px; }
 .res-kpi-sub   { font-size: .68rem; color: var(--text-muted); margin-top: 1px; line-height: 1.25; }
+/* "Attive" e' la domanda di tutti i giorni: e' l'unica col numero grande.
+   "Anagrafica totale" chiude la riga col suo bordo, perche' e' l'unico numero
+   che non conta persone in forza ma schede. */
+.res-kpi-primario .res-kpi-val { font-size: 1.6rem; line-height: 1.15; }
+.res-kpi-totale { border: 1px solid var(--border, rgba(127,127,127,.35)); }
 
 /* Ruoli add row */
 .res-ruoli-add-row {
