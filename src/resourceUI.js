@@ -70,6 +70,24 @@ function _isPersonaInForza(p, mese) {
     return true;
 }
 
+/**
+ * Il paese di una persona viene dalla societa': Branch e' la Francia, B4T
+ * l'Italia. Una societa' diversa da queste due non finisce in nessuno dei due
+ * paesi ma in un riquadro a parte: sparire da entrambi i totali senza dirlo
+ * sarebbe il modo peggiore di sbagliare, perche' il totale resta plausibile.
+ */
+function _paesePersona(p) {
+    const s = String((p && p.societa) || '').trim().toLowerCase();
+    if (s === 'branch') return 'Francia';
+    if (s === 'b4t') return 'Italia';
+    return 'Altra';
+}
+
+/** "P. IVA", "P.IVA", "p iva": lo stesso contratto scritto in tre modi. */
+function _isPIva(p) {
+    return String((p && p.tipoContratto) || '').toUpperCase().replace(/[^A-Z]/g, '') === 'PIVA';
+}
+
 // ─── Internal state ──────────────────────────────────────────
 let _currentSubTab = 'persone';
 let _selectedPersonaId = null;
@@ -91,6 +109,7 @@ let _econSortCol = 'persona';    // 'persona' | 'ruolo' | 'codice_ruolo'
 let _econSortDir = 'asc';
 let _resFilterAlloc = 'all'; // 'all' | 'con' | 'senza'
 let _personaStatusFilter = null; // null | 'attive' | 'scadenza' | 'cessate'
+let _personaPaeseFilter = null;  // null | 'Italia' | 'Francia' | 'Altra'
 let _capacityCharts = {};   // Chart.js instances for capacity tab
 let _importData = null;
 let _importTipo = 'persone';
@@ -425,6 +444,12 @@ function _renderPersone() {
         filtered = filtered.filter(p => p.statoAssunzione === 'da_ricercare' && p.dataAssunzione?.slice(0, 7) > _meseOggi);
     }
 
+    // Il filtro paese si somma a quello di stato: "Attive" + "Italia" deve
+    // poter stare insieme, sono due domande diverse.
+    if (_personaPaeseFilter) {
+        filtered = filtered.filter(p => _paesePersona(p) === _personaPaeseFilter);
+    }
+
     const scenarioId = _ctx.getActiveScenarioId();
     const allocCounts = {};
     listAllocazioni({ scenarioId }).forEach(a => { allocCounts[a.personaId] = (allocCounts[a.personaId] || 0) + 1; });
@@ -437,6 +462,27 @@ function _renderPersone() {
     const numIngresso = persone.filter(p => p.statoAssunzione === 'in_ingresso' && p.dataAssunzione?.slice(0, 7) > meseCorrente).length;
     const numRicercare = persone.filter(p => p.statoAssunzione === 'da_ricercare' && p.dataAssunzione?.slice(0, 7) > meseCorrente).length;
     const attive = persone.filter(p => _isPersonaInForza(p, meseCorrente)).length;
+
+    // Conteggi per paese. Le P. IVA sono dentro il totale del paese: la riga
+    // sotto dice quante sono, non si aggiunge al totale.
+    const _contaPaese = (nome) => {
+        const righe = persone.filter(p => _paesePersona(p) === nome);
+        return {
+            totale: righe.length,
+            inForza: righe.filter(p => _isPersonaInForza(p, meseCorrente)).length,
+            pIva: righe.filter(_isPIva).length,
+        };
+    };
+    const kpiItalia = _contaPaese('Italia');
+    const kpiFrancia = _contaPaese('Francia');
+    const kpiAltra = _contaPaese('Altra');
+    const _tilePaese = (nome, k, bordo) => `
+            <div class="res-kpi-mini res-kpi-clickable${_personaPaeseFilter === nome ? ' res-kpi-selected' : ''}" data-paese-filter="${nome}" style="border-left:2px solid ${bordo};">
+                <span class="res-kpi-label">${nome}</span>
+                <span class="res-kpi-val">${k.totale}</span>
+                <span class="res-kpi-sub">${k.inForza} in forza</span>
+                <span class="res-kpi-sub">di cui P. IVA ${k.pIva}</span>
+            </div>`;
     const prossimaScadenza = persone
         .filter(p => p.dataTermine && p.dataTermine.slice(0, 7) >= meseCorrente)
         .map(p => p.dataTermine.slice(0, 7))
@@ -500,6 +546,9 @@ function _renderPersone() {
                 <span class="res-kpi-label">Persone totali</span>
                 <span class="res-kpi-val">${totale}</span>
             </div>
+            ${_tilePaese('Italia', kpiItalia, '#22c55e')}
+            ${_tilePaese('Francia', kpiFrancia, '#6366f1')}
+            ${kpiAltra.totale > 0 ? _tilePaese('Altra', kpiAltra, '#f59e0b') : ''}
             <div class="res-kpi-mini accent res-kpi-clickable${_personaStatusFilter === 'attive' ? ' res-kpi-selected' : ''}" data-status-filter="attive">
                 <span class="res-kpi-label">Attive</span>
                 <span class="res-kpi-val">${attive}</span>
@@ -610,6 +659,13 @@ function _renderPersone() {
     // KPI status filter clicks
     panel.querySelectorAll('.res-kpi-clickable').forEach(el => {
         el.addEventListener('click', () => {
+            // I riquadri paese hanno un filtro loro, che convive con lo stato.
+            if (el.dataset.paeseFilter !== undefined) {
+                const paese = el.dataset.paeseFilter || null;
+                _personaPaeseFilter = (_personaPaeseFilter === paese) ? null : paese;
+                _renderPersone();
+                return;
+            }
             const val = el.dataset.statusFilter || null;
             _personaStatusFilter = (_personaStatusFilter === val) ? null : val;
             _renderPersone();

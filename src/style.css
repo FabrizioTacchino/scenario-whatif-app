@@ -2614,6 +2614,7 @@ body {
 .res-kpi-clickable.res-kpi-selected { box-shadow: 0 0 0 2px var(--primary, #638cff); }
 .res-kpi-label { font-size: .72rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: .4px; }
 .res-kpi-val   { font-size: 1rem; font-weight: 700; color: var(--text-primary); margin-top: 2px; }
+.res-kpi-sub   { font-size: .68rem; color: var(--text-muted); margin-top: 1px; line-height: 1.25; }
 
 /* Ruoli add row */
 .res-ruoli-add-row {
