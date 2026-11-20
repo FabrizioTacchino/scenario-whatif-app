@@ -88,6 +88,23 @@ function _isPIva(p) {
     return String((p && p.tipoContratto) || '').toUpperCase().replace(/[^A-Z]/g, '') === 'PIVA';
 }
 
+/**
+ * Assunzione gia' confermata che deve ancora iniziare: ha una data di inizio
+ * nel futuro ma non e' ne' "in ingresso" ne' "da ricercare". Senza un posto
+ * suo questa persona resta dentro il totale e fuori da tutte le voci che lo
+ * compongono, e i conti non tornano di uno senza che si capisca perche'.
+ *
+ * Vale anche per chi viene inserito oggi: lo stato predefinito e' "assunta",
+ * quindi una data di inizio futura finisce qui per forza, non per distrazione.
+ */
+function _isInEntrata(p, mese) {
+    if (!p) return false;
+    const m = mese || new Date().toISOString().slice(0, 7);
+    const da = p.dataAssunzione ? p.dataAssunzione.slice(0, 7) : null;
+    if (!da || da <= m) return false;
+    return p.statoAssunzione !== 'in_ingresso' && p.statoAssunzione !== 'da_ricercare';
+}
+
 // ─── Internal state ──────────────────────────────────────────
 let _currentSubTab = 'persone';
 let _selectedPersonaId = null;
@@ -440,6 +457,8 @@ function _renderPersone() {
         filtered = filtered.filter(p => p.dataTermine && p.dataTermine.slice(0, 7) < _meseOggi);
     } else if (_personaStatusFilter === 'ingresso') {
         filtered = filtered.filter(p => p.statoAssunzione === 'in_ingresso' && p.dataAssunzione?.slice(0, 7) > _meseOggi);
+    } else if (_personaStatusFilter === 'entrata') {
+        filtered = filtered.filter(p => _isInEntrata(p, _meseOggi));
     } else if (_personaStatusFilter === 'ricercare') {
         filtered = filtered.filter(p => p.statoAssunzione === 'da_ricercare' && p.dataAssunzione?.slice(0, 7) > _meseOggi);
     }
@@ -461,6 +480,7 @@ function _renderPersone() {
     const inScadenza = persone.filter(p => p.dataTermine && p.dataTermine.slice(0, 7) >= meseCorrente).length;
     const numIngresso = persone.filter(p => p.statoAssunzione === 'in_ingresso' && p.dataAssunzione?.slice(0, 7) > meseCorrente).length;
     const numRicercare = persone.filter(p => p.statoAssunzione === 'da_ricercare' && p.dataAssunzione?.slice(0, 7) > meseCorrente).length;
+    const numEntrata = persone.filter(p => _isInEntrata(p, meseCorrente)).length;
     const attive = persone.filter(p => _isPersonaInForza(p, meseCorrente)).length;
 
     // Conteggi per paese. Le P. IVA sono dentro il totale del paese: la riga
@@ -565,6 +585,10 @@ function _renderPersone() {
                 <span class="res-kpi-label">In ingresso</span>
                 <span class="res-kpi-val" style="color:#3b82f6;">${numIngresso}</span>
             </div>` : ''}
+            ${numEntrata > 0 ? `<div class="res-kpi-mini res-kpi-clickable${_personaStatusFilter === 'entrata' ? ' res-kpi-selected' : ''}" data-status-filter="entrata" style="border-left:2px solid #14b8a6;">
+                <span class="res-kpi-label">In entrata</span>
+                <span class="res-kpi-val" style="color:#14b8a6;">${numEntrata}</span>
+            </div>` : ''}
             ${numRicercare > 0 ? `<div class="res-kpi-mini res-kpi-clickable${_personaStatusFilter === 'ricercare' ? ' res-kpi-selected' : ''}" data-status-filter="ricercare" style="border-left:2px solid #f59e0b;">
                 <span class="res-kpi-label">Da ricercare</span>
                 <span class="res-kpi-val" style="color:#f59e0b;">${numRicercare}</span>
@@ -620,7 +644,7 @@ function _renderPersone() {
                                     const da = p.dataAssunzione?.slice(0, 7);
                                     if (da && da > oggi && p.statoAssunzione === 'in_ingresso') return '<span class="res-badge-ingresso">In ingresso</span>';
                                     if (da && da > oggi && p.statoAssunzione === 'da_ricercare') return '<span class="res-badge-ricerca">Da ricercare</span>';
-                                    if (da && da > oggi) return '<span class="res-badge-ingresso">Futura</span>';
+                                    if (da && da > oggi) return '<span class="res-badge-entrata">In entrata</span>';
                                     if (!_isPersonaAttiva(p)) return '<span class="res-status-dot inactive"></span> Inattiva';
                                     return '<span class="res-status-dot active"></span> Attiva';
                                 })()}

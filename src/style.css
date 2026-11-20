@@ -3128,6 +3128,17 @@ body {
   background: rgba(245, 158, 11, .12);
   color: #f59e0b;
 }
+/* Assunzione confermata che deve ancora iniziare: colore suo, per non
+   confonderla a colpo d'occhio con "In ingresso" che e' blu. */
+.res-badge-entrata {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: 8px;
+  font-size: .7rem;
+  font-weight: 600;
+  background: rgba(20, 184, 166, .12);
+  color: #14b8a6;
+}
 
 /* ─── Ruoli tipo badges ──────────────────────────────────────── */
 .res-badge-necessario {
