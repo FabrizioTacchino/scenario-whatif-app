@@ -1329,6 +1329,7 @@ function setupUpdateImport() {
             comparedScenarioIds = null;
             loadScenarioList();
             $('#active-scenario-select').value = scen.id;
+            _popolaChipCommesse();  // le commesse nuove del file sono gia' cercabili
 
             refreshDashboard();
             renderAssumptionsTable();
@@ -1395,19 +1396,7 @@ function populateFilters() {
     // Non serve fare nulla: il click è gestito da setupFilterEvents una volta sola.
 
     // Commessa chips (ricreati ad ogni initApp — nessun listener diretto, usa delegation)
-    const commContainer = $('#filter-commessa');
-    commContainer.innerHTML = '';
-    for (const c of commesse) {
-        const btn = document.createElement('button');
-        btn.className = 'filter-chip';
-        btn.dataset.value = c.key;
-        btn.dataset.settore = c.settore;
-        btn.dataset.codice = c.codice;
-        btn.dataset.type = c.type;
-        btn.dataset.search = `${c.codice} ${c.nome}`.toLowerCase();
-        btn.textContent = `${c.codice} — ${c.nome}`;
-        commContainer.appendChild(btn);
-    }
+    _popolaChipCommesse();
 
     // Date range: lasciato vuoto = nessun limite (mostra tutti i mesi, inclusi quelli degli scenari oltre la baseline)
     $('#filter-date-from').value = '';
@@ -1704,6 +1693,7 @@ function loadScenarioList() {
             activeScenarioId = sel.value === '__baseline__' ? null : sel.value;
             comparedScenarioIds = null; // esci da modalità confronto se attiva
             _invalidaCacheDate();       // le date dipendono dallo scenario attivo
+            _popolaChipCommesse();      // e anche l'elenco laterale
             refreshDashboard();         // esegue gia' renderAssumptionsTable()
             if (document.querySelector('.tab-btn.active')?.dataset.tab === 'risorse') {
                 renderResourceTab();
@@ -5276,14 +5266,7 @@ function _caricaElencoRinomina() {
     const sel = $('#admin-rinomina-commessa');
     if (!sel) return;
 
-    const viste = new Map();
-    for (const c of appData?.commesse || []) viste.set(c.key, c);
-    for (const scen of listScenarios()) {
-        for (const c of scen.newCommesse || []) if (!viste.has(c.key)) viste.set(c.key, c);
-    }
-
-    const elenco = [...viste.values()]
-        .sort((a, b) => String(a.codice || '').localeCompare(String(b.codice || '')));
+    const elenco = _tutteLeCommesseMaiViste();
 
     sel.textContent = '';
     if (!elenco.length) {
@@ -5321,6 +5304,74 @@ function _setupAdminRinomina() {
 
 let _paesiBozza = null;
 
+/**
+ * Le commesse che si possono scegliere adesso nella barra laterale: quelle
+ * dell'AOP piu' quelle che vivono solo dentro lo scenario attivo.
+ *
+ * Senza le seconde l'elenco ne mostra 49 mentre la tabella ne calcola 91, e
+ * cercarne una non da' nulla perche' il suo chip non esiste. Peggio: la
+ * selezione dei chip e' una lista bianca di chiavi, quindi bastava
+ * selezionarne uno qualsiasi per far uscire dai conti tutte quelle di
+ * scenario - non perche' escluse, ma perche' non selezionabili.
+ *
+ * Solo lo scenario attivo: il chip di un altro scenario filtrerebbe il nulla.
+ */
+function _commesseSelezionabili() {
+    const base = appData?.commesse || [];
+    const scen = activeScenarioId ? getScenario(activeScenarioId) : null;
+    const nuove = (scen?.newCommesse || []).filter(c => !base.some(b => b.key === c.key));
+    return nuove.length ? [...base, ...nuove] : base;
+}
+
+/**
+ * Tutte le commesse mai viste: l'AOP piu' quelle di qualunque scenario.
+ * Qui servono tutte e non solo quelle dello scenario attivo, perche' il paese
+ * e' una proprieta' del codice e vale per sempre: altrimenti le francesi
+ * arrivate con uno scenario non si possono assegnare, e premendo "Francia"
+ * spariscono invece di comparire.
+ */
+function _tutteLeCommesseMaiViste() {
+    const viste = new Map();
+    for (const c of appData?.commesse || []) viste.set(c.key, c);
+    for (const scen of listScenarios()) {
+        for (const c of scen.newCommesse || []) if (!viste.has(c.key)) viste.set(c.key, c);
+    }
+    return [...viste.values()]
+        .sort((a, b) => String(a.codice || "").localeCompare(String(b.codice || "")));
+}
+
+/**
+ * Rifa' i chip delle commesse. Le selezioni in corso si conservano a mano,
+ * ma solo quelle che puntano a una commessa ancora presente: una chiave
+ * rimasta appesa sarebbe una lista bianca verso qualcosa che non c'e' piu',
+ * e svuoterebbe la tabella senza che nulla lo spieghi.
+ */
+function _popolaChipCommesse() {
+    const cont = $('#filter-commessa');
+    if (!cont) return;
+    const attivi = new Set(Array.from(cont.querySelectorAll('.filter-chip.active')).map(b => b.dataset.value));
+    const base = appData?.commesse || [];
+    cont.innerHTML = '';
+    for (const c of _commesseSelezionabili()) {
+        const soloScenario = !base.some(b => b.key === c.key);
+        const btn = document.createElement('button');
+        btn.className = 'filter-chip'
+            + (attivi.has(c.key) ? ' active' : '')
+            + (soloScenario ? ' chip-da-scenario' : '');
+        btn.dataset.value = c.key;
+        btn.dataset.settore = c.settore || '';
+        btn.dataset.codice = c.codice || '';
+        btn.dataset.type = c.type || '';
+        btn.dataset.search = `${c.codice} ${c.nome}`.toLowerCase();
+        btn.textContent = `${c.codice} — ${c.nome}`;
+        if (soloScenario) btn.title = 'Solo in questo scenario: non e\' nell\'AOP di baseline';
+        cont.appendChild(btn);
+    }
+    // I chip rifatti tornano tutti visibili: la ricerca e i filtri gia'
+    // impostati vanno riapplicati, o l'elenco smentisce la casella di ricerca.
+    filterSidebarCommesse();
+}
+
 function _popolaChipPaese() {
     const cont = $('#filter-paese');
     if (!cont) return;
@@ -5336,7 +5387,7 @@ function _popolaChipPaese() {
     }
     // "Da assegnare" esiste perche' una commessa nuova arriva senza paese: va
     // vista, non fatta sparire da un totale che nessuno sa incompleto.
-    const mancanti = codiciDaAssegnare(appData?.commesse || []).length;
+    const mancanti = codiciDaAssegnare(_tutteLeCommesseMaiViste()).length;
     const nd = document.createElement('button');
     nd.className = 'filter-chip' + (attivi.has('') ? ' active' : '');
     nd.dataset.value = '';
@@ -5347,7 +5398,7 @@ function _popolaChipPaese() {
 function _aggiornaRiepilogoPaesi() {
     const el = $('#admin-paesi-riepilogo');
     if (!el) return;
-    const commesse = appData?.commesse || [];
+    const commesse = _tutteLeCommesseMaiViste();
     if (!commesse.length) { el.textContent = ''; return; }
     const mancanti = codiciDaAssegnare(commesse).length;
     el.textContent = mancanti
@@ -5357,7 +5408,7 @@ function _aggiornaRiepilogoPaesi() {
 
 function _commessePaesiFiltrate() {
     const q = ($('#paesi-search')?.value || '').toLowerCase().trim();
-    const tutte = appData?.commesse || [];
+    const tutte = _tutteLeCommesseMaiViste();
     if (!q) return tutte;
     return tutte.filter(c => (c.codice + ' ' + c.nome).toLowerCase().includes(q));
 }
@@ -5365,7 +5416,7 @@ function _commessePaesiFiltrate() {
 function _aggiornaConteggioPaesi() {
     const el = $('#paesi-conteggio');
     if (!el) return;
-    const tutte = appData?.commesse || [];
+    const tutte = _tutteLeCommesseMaiViste();
     const senza = tutte.filter(c => !PAESI.includes(_paesiBozza?.[c.codice])).length;
     el.textContent = _commessePaesiFiltrate().length + ' di ' + tutte.length + ' mostrate, ' + senza + ' senza paese';
 }
@@ -5388,7 +5439,7 @@ function _renderTabellaPaesi() {
 
 function _setupAdminPaesi() {
     $('#btn-admin-paesi')?.addEventListener('click', () => {
-        if (!appData?.commesse?.length) {
+        if (!_tutteLeCommesseMaiViste().length) {
             notify.errore('Nessuna commessa caricata: apri prima un file AOP.');
             return;
         }

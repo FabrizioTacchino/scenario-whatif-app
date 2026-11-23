@@ -547,6 +547,19 @@ body {
   white-space: nowrap;
 }
 
+/* Commessa che vive solo dentro lo scenario attivo e non nell'AOP: cambiando
+   scenario l'elenco cambia, e senza un segno sembrerebbe cambiata la baseline. */
+.filter-chip.chip-da-scenario::before {
+  content: '';
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+  margin-right: 6px;
+  flex: 0 0 auto;
+}
+.filter-chip.chip-da-scenario.active::before { background: #fff; }
+
 .filter-chip:hover {
   border-color: var(--accent);
   color: var(--text-primary);
